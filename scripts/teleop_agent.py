@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import argparse
 import builtins
-import json
-import socket
+import sys
 import time
 from contextlib import contextmanager
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Optional
 
 from isaaclab.app import AppLauncher
 
@@ -50,10 +50,22 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 
+# Make the top-level repo importable so we can use teleop utils without installation.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
 
 import Galaxea_Lab_External.tasks  # noqa: F401
+
+try:
+    from teleop.ee_targets import EETargetsReceiver
+except Exception as exc:  # noqa: BLE001
+    raise SystemExit(
+        f"[ERROR] Could not import teleop utilities. Ensure repo root ({REPO_ROOT}) is on PYTHONPATH. {exc}"
+    ) from exc
 
 
 def _stub_rule_policy(target_env) -> None:
@@ -85,58 +97,51 @@ def suppress_print():
         builtins.print = original_print
 
 
-class UdpPacketLogger:
-    """Non-blocking UDP receiver that prints packet summaries."""
+class TeleopRulePolicy:
+    """Minimal rule_policy replacement that only drives grippers from UDP."""
 
-    def __init__(self, listen_ip: str, port: int, log_payload: bool = False):
-        self.log_payload = log_payload
-        self.packet_count = 0
+    def __init__(self, env, receiver: EETargetsReceiver, max_open: float = 0.04):
+        self.env = env
+        self.receiver = receiver
+        self.device = env.device
+        self.max_open = max_open
+        self.count = 0
+        self.total_time_steps = 1_000_000_000  # keep episode alive
+        # Cache joint ids for grippers
+        self.left_ids = [int(i) for i in env._left_gripper_dof_idx]  # type: ignore[attr-defined]
+        self.right_ids = [int(i) for i in env._right_gripper_dof_idx]  # type: ignore[attr-defined]
         self.last_seq: Optional[int] = None
-        self.last_from: Optional[Tuple[str, int]] = None
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((listen_ip, port))
-        self.sock.setblocking(False)
-        print(f"[UDP] Listening on {listen_ip}:{port}")
 
-    def poll(self) -> None:
-        """Drain all pending UDP packets and log a summary for each."""
-        while True:
-            try:
-                data, addr = self.sock.recvfrom(65535)
-            except BlockingIOError:
-                return
-            raw = data.decode("utf-8", errors="replace").strip()
-            self.packet_count += 1
-            self.last_from = addr
-            try:
-                packet = json.loads(raw)
-                seq = packet.get("seq")
-                precision = packet.get("precision")
-                frame = packet.get("frame")
-                ts = packet.get("t")
-                arms = packet.get("arms") or []
-                arm_ids = ",".join(str(a.get("id", "?")) for a in arms)
-                arm_summaries = "; ".join(
-                    f"{a.get('id','?')}:p={a.get('p')} q={a.get('q')} grip={a.get('grip')}"
-                    for a in arms
-                )
-                self.last_seq = seq
-                print(
-                    f"[UDP] seq={seq} frame={frame} t={ts} prec={precision} arms=[{arm_ids}] from {addr}"
-                )
-                if arm_summaries:
-                    print(f"[UDP:arms] {arm_summaries}")
-            except Exception as exc:  # noqa: BLE001
-                print(f"[UDP] Received {len(data)} bytes from {addr} but failed to parse JSON: {exc}")
+    def _grip_to_joint(self, grip: float) -> float:
+        grip_clamped = max(0.0, min(1.0, float(grip)))
+        return grip_clamped * self.max_open
+
+    def get_action(self):
+        state, _ = self.receiver.get_latest()
+        if not state:
+            return None, None
+
+        joint_ids = []
+        values = []
+        for arm in state.arms:
+            if arm.id == "L":
+                joint_ids.extend(self.left_ids)
+            elif arm.id == "R":
+                joint_ids.extend(self.right_ids)
             else:
-                if self.log_payload:
-                    print(f"[UDP:payload] {raw}")
+                continue
+            values.append(self._grip_to_joint(arm.grip))
 
-    def close(self) -> None:
-        try:
-            self.sock.close()
-        except Exception:
-            pass
+        if not joint_ids:
+            return None, None
+
+        self.last_seq = state.seq
+        action = torch.tensor([values], device=self.device)
+        return action, joint_ids
+
+    def reset_counters(self):
+        self.count = 0
+        self.last_seq = None
 
 
 def main() -> None:
@@ -163,8 +168,38 @@ def main() -> None:
 
     print(f"[INFO] Gym observation space: {env.observation_space}")
     print(f"[INFO] Gym action space: {env.action_space}")
-    print(f"[INFO] Starting UDP listener on {args_cli.listen_ip}:{args_cli.port}")
-    receiver = UdpPacketLogger(args_cli.listen_ip, args_cli.port, args_cli.log_payload)
+
+    # Start UDP receiver (threaded) and build a teleop rule policy that consumes it.
+    receiver = EETargetsReceiver(bind_ip=args_cli.listen_ip, port=args_cli.port)
+    receiver.start()
+    teleop_policy = TeleopRulePolicy(env.unwrapped, receiver)
+
+    def install_teleop_policy():
+        env.unwrapped.rule_policy = teleop_policy
+        env.unwrapped.env_step_action = None
+        env.unwrapped.env_step_joint_ids = None
+        teleop_policy.reset_counters()
+        print("[INFO] teleop rule_policy installed (gripper only).")
+
+    try:
+        bound_reset = env.unwrapped._reset_idx
+        original_reset_idx_func = getattr(bound_reset, "__func__", None)
+
+        def original_reset_call(env_ids=None):
+            if original_reset_idx_func:
+                return original_reset_idx_func(env.unwrapped, env_ids)
+            return bound_reset(env_ids)
+
+        def patched_reset_idx(env_ids=None):  # type: ignore[override]
+            result = original_reset_call(env_ids)
+            install_teleop_policy()
+            return result
+
+        env.unwrapped._reset_idx = patched_reset_idx  # type: ignore[assignment]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] Could not wrap _reset_idx: {exc}")
+
+    install_teleop_policy()
 
     # Precompute a zero action to keep the sim ticking without control.
     zero_action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
@@ -174,32 +209,39 @@ def main() -> None:
     last_heartbeat = time.time()
     heartbeat_s = 5.0
     waiting_for_first_packet = True
+    last_logged_seq: Optional[int] = None
 
     try:
         while simulation_app.is_running():
-            receiver.poll()
+            state, age = receiver.get_latest()
+            if state and state.seq != last_logged_seq:
+                grip_summary = ", ".join(f"{arm.id}=grip{arm.grip:.2f}" for arm in state.arms)
+                print(f"[UDP] seq={state.seq} age={age:.3f}s frame={state.frame} {grip_summary}")
+                last_logged_seq = state.seq
             now = time.time()
-            if waiting_for_first_packet and receiver.packet_count == 0:
+            if waiting_for_first_packet and not state:
                 # Hold the sim until the first packet arrives so we can prove ingress.
                 if now - last_heartbeat > heartbeat_s:
                     print("[HEARTBEAT] waiting for UDP... udp_packets=0")
                     last_heartbeat = now
                 time.sleep(0.01)
                 continue
+            elif waiting_for_first_packet and state:
+                print("[INFO] First UDP packet received; starting sim stepping.")
+                waiting_for_first_packet = False
 
-            waiting_for_first_packet = False
             with torch.inference_mode():
                 with suppress_print():
                     env.step(zero_action)
 
             if now - last_heartbeat > heartbeat_s:
                 print(
-                    f"[HEARTBEAT] sim ok, udp_packets={receiver.packet_count}, "
-                    f"last_seq={receiver.last_seq}, last_from={receiver.last_from}"
+                    f"[HEARTBEAT] sim ok, last_seq={teleop_policy.last_seq}, "
+                    f"age={age if state else float('inf'):.2f}s"
                 )
                 last_heartbeat = now
     finally:
-        receiver.close()
+        receiver.stop()
         env.close()
 
 
