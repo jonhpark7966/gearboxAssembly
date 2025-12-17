@@ -7,6 +7,7 @@ import argparse
 import sys
 import termios
 import tty
+import os
 
 from isaaclab.app import AppLauncher
 
@@ -36,6 +37,14 @@ teleop_mode = True
 is_recording = False
 episode_idx = 0
 should_quit = False
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
+if SCRIPTS_DIR not in sys.path:
+    sys.path.append(SCRIPTS_DIR)
+
+from teleop_utils.ee_targets import EETargetsReceiver
+from teleop_utils.filters import PoseCommandFilter, ArmPoseCommand
 
 import torch
 import isaacsim.core.utils.torch as torch_utils
@@ -434,6 +443,66 @@ def deg_list_to_rad_array(deg_list, offsets=None):
     if offsets is not None:
         arr = arr + offsets
     return arr
+
+
+def get_current_ee_pose(scene: InteractiveScene, arm_entity_cfg: SceneEntityCfg):
+    robot = scene["robot"]
+    body_id = arm_entity_cfg.body_ids[0]
+    pose_w = robot.data.body_state_w[:, body_id, 0:7]
+    return tuple(pose_w[0, 0:3].tolist()), tuple(pose_w[0, 3:7].tolist())
+
+
+def apply_pose_command(
+    sim: sim_utils.SimulationContext,
+    scene: InteractiveScene,
+    arm_entity_cfg: SceneEntityCfg,
+    gripper_entity_cfg: SceneEntityCfg,
+    ik_controller: DifferentialIKController,
+    cmd: ArmPoseCommand,
+) -> torch.Tensor:
+    """Apply a filtered ArmPoseCommand via Differential IK + simple grip scaling."""
+    robot = scene["robot"]
+    arm_body_ids = arm_entity_cfg.body_ids
+    if robot.is_fixed_base:
+        ee_jacobi_idx = arm_body_ids[0] - 1
+    else:
+        ee_jacobi_idx = arm_body_ids[0]
+
+    target_p = torch.tensor(cmd.p, device=sim.device).unsqueeze(0)
+    target_q = torch.tensor(cmd.q, device=sim.device).unsqueeze(0)
+    ik_commands = torch.cat([target_p, target_q], dim=-1)
+    ik_controller.set_command(ik_commands)
+
+    jacobian = robot.root_physx_view.get_jacobians()[
+        :, ee_jacobi_idx, :, arm_entity_cfg.joint_ids
+    ]
+    ee_pose_w = robot.data.body_state_w[:, arm_body_ids[0], 0:7]
+    root_pose_w = robot.data.root_state_w[:, 0:7]
+    joint_pos = robot.data.joint_pos[:, arm_entity_cfg.joint_ids]
+
+    ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        root_pose_w[:, 0:3],
+        root_pose_w[:, 3:7],
+        ee_pose_w[:, 0:3],
+        ee_pose_w[:, 3:7],
+    )
+
+    joint_pos_des = ik_controller.compute(
+        ee_pos_b, ee_quat_b, jacobian, joint_pos
+    )
+
+    robot.set_joint_position_target(
+        joint_pos_des, joint_ids=arm_entity_cfg.joint_ids
+    )
+
+    grip_target = torch.tensor(
+        [cmd.grip * 0.04], device=sim.device
+    ).repeat(len(gripper_entity_cfg.joint_ids))
+    robot.set_joint_position_target(
+        grip_target, joint_ids=gripper_entity_cfg.joint_ids
+    )
+    return joint_pos_des
+
 
 # ============================================================================
 # End of UDP Teleoperation Code
@@ -1092,16 +1161,14 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     print("NOTE: Type keys directly in the terminal (no need to press Enter)")
     print("="*80 + "\n")
 
-    # === Start UDP Receiver ===
+    # === Start ee_targets Receiver ===
     print("\n" + "="*80)
-    print("STARTING UDP TELEOPERATION RECEIVER")
+    print("STARTING UDP TELEOPERATION RECEIVER (ee_targets v1)")
     print("="*80)
-    udp = UDPArmReceiver(bind_ip="0.0.0.0", port=5005, max_age=0.5)
+    udp = EETargetsReceiver(bind_ip="0.0.0.0", port=5005, timeout_s=0.5)
     udp.start()
-    print("[INFO] UDP receiver listening on port 5005")
-    print("[INFO] Expected message format:")
-    print("[INFO]   {\"ts\": <timestamp>, \"left_arm_deg\": [6 angles], \"right_arm_deg\": [6 angles],")
-    print("[INFO]    \"left_gripper\": <0.01-1.0>, \"right_gripper\": <0.01-1.0>}")
+    print("[INFO] UDP receiver listening on port 5005 for ee_targets v1")
+    print("[INFO] Expected: {v,type=\"ee_targets\",seq,t,frame,clutch,precision,reset,arms:[...]}")
     print("="*80 + "\n")
 
     # === Joint Angle Offsets===
@@ -1330,15 +1397,30 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     gear_to_pin_map = prepare_mounting_plan(sim, scene, left_arm_entity_cfg, 
                                             right_arm_entity_cfg, initial_root_state)
     
+    # Teleop IK controllers (separate from scripted path)
+    teleop_ik_cfg = DifferentialIKControllerCfg(
+        command_type="pose", use_relative_mode=False, ik_method="dls"
+    )
+    teleop_ik_left = DifferentialIKController(teleop_ik_cfg, num_envs=scene.num_envs, device=sim.device)
+    teleop_ik_right = DifferentialIKController(teleop_ik_cfg, num_envs=scene.num_envs, device=sim.device)
+
+    def _current_pose_fn(arm_id: str):
+        if arm_id == "L":
+            return get_current_ee_pose(scene, left_arm_entity_cfg)
+        if arm_id == "R":
+            return get_current_ee_pose(scene, right_arm_entity_cfg)
+        raise ValueError(f"Unknown arm id: {arm_id}")
+
+    cmd_filter = PoseCommandFilter(
+        timeout_s=0.5,
+        alpha_p=0.2,
+        alpha_q=0.2,
+        alpha_grip=0.3,
+        grip_deadband=0.02,
+        current_pose_fn=_current_pose_fn,
+    )
     
     # === Initialize Teleoperation State ===
-    # teleop_mode = True  
-    last_left_deg = None
-    last_right_deg = None
-    last_left_gripper = 0.04
-    last_right_gripper = 0.04
-    
-    # Initialize action variables (for data recording)
     left_rad = np.zeros(6, dtype=np.float32)
     right_rad = np.zeros(6, dtype=np.float32)
     left_grip_cmd = 0.04
@@ -1412,65 +1494,32 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             save_pending = True
             recording_count = 0  # Reset counter
 
-        left_deg, right_deg, left_gripper, right_gripper, ts = udp.get_latest()
-        
-        if left_deg is not None and right_deg is not None:
-            # Update cache
-            last_left_deg = left_deg
-            last_right_deg = right_deg
-            last_left_gripper = left_gripper if left_gripper is not None else 0.04
-            last_right_gripper = right_gripper if right_gripper is not None else 0.04
-            
-            # Convert to radians (always update for recording)
-            left_rad = deg_list_to_rad_array(left_deg, offsets=left_joint_offsets)
-            right_rad = deg_list_to_rad_array(right_deg, offsets=right_joint_offsets)
-            
-            # Map gripper values
-            left_grip_cmd = last_left_gripper * 0.04
-            right_grip_cmd = last_right_gripper * 0.04
-            
-            # Apply commands ONLY in teleoperation mode
-            if teleop_mode:
-                # Directly set joint targets
-                robot = scene["robot"]
-                
-                # Left arm
-                left_joint_targets = torch.from_numpy(left_rad).to(sim.device).unsqueeze(0)
-                robot.set_joint_position_target(
-                    left_joint_targets, 
-                    joint_ids=left_arm_entity_cfg.joint_ids
+        state, age, reset_edge = udp.get_latest()
+        commands = cmd_filter.update(state, reset_edge)
+
+        if teleop_mode and commands:
+            for cmd in commands:
+                if cmd.id == "L":
+                    l_cmd = apply_pose_command(
+                        sim, scene, left_arm_entity_cfg, left_gripper_entity_cfg, teleop_ik_left, cmd
+                    )
+                    left_grip_cmd = cmd.grip * 0.04
+                    left_rad = l_cmd[0].detach().cpu().numpy()
+                elif cmd.id == "R":
+                    r_cmd = apply_pose_command(
+                        sim, scene, right_arm_entity_cfg, right_gripper_entity_cfg, teleop_ik_right, cmd
+                    )
+                    right_grip_cmd = cmd.grip * 0.04
+                    right_rad = r_cmd[0].detach().cpu().numpy()
+
+            if commands and count % 50 == 0:
+                status = ", ".join(
+                    f"{c.id}: clutch={int(c.clutch)} prec={int(c.precision)} mode={c.mode}"
+                    for c in commands
                 )
-                
-                # Left gripper
-                left_gripper_targets = torch.tensor([left_grip_cmd], device=sim.device).repeat(len(left_gripper_joint_ids))
-                robot.set_joint_position_target(
-                    left_gripper_targets,
-                    joint_ids=left_gripper_joint_ids
-                )
-                
-                # Right arm
-                right_joint_targets = torch.from_numpy(right_rad).to(sim.device).unsqueeze(0)
-                robot.set_joint_position_target(
-                    right_joint_targets,
-                    joint_ids=right_arm_entity_cfg.joint_ids
-                )
-                
-                # Right gripper
-                right_gripper_targets = torch.tensor([right_grip_cmd], device=sim.device).repeat(len(right_gripper_joint_ids))
-                robot.set_joint_position_target(
-                    right_gripper_targets,
-                    joint_ids=right_gripper_joint_ids
-                )
-                
-                # Debug output
-                if count % 50 == 0:
-                    print(f"[TELEOP] L_arm=[{left_deg[0]:.1f}°, {left_deg[1]:.1f}°, ...] "
-                          f"R_arm=[{right_deg[0]:.1f}°, {right_deg[1]:.1f}°, ...] "
-                          f"L_grip={last_left_gripper:.2f} R_grip={last_right_gripper:.2f}")
-        else:
-            # UDP timeout
-            if teleop_mode and count % 100 == 0:
-                print(f"[WARN] No teleoperation data received (timeout)")
+                print(f"[TELEOP] {status}")
+        elif teleop_mode and count % 100 == 0:
+            print(f"[WARN] No teleoperation data received (timeout or clutch=0)")
 
 
         if not teleop_mode:
