@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import sys
 
 from isaaclab.app import AppLauncher
 
@@ -23,6 +24,9 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
 
+print(f"args_cli: {args_cli}")
+print(f"Python path: {sys.path}")
+
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -32,10 +36,10 @@ simulation_app = app_launcher.app
 import gymnasium as gym
 import torch
 
-import isaaclab_tasks  # noqa: F401
+import isaaclab_tasks
 from isaaclab_tasks.utils import parse_env_cfg
 
-import Galaxea_Lab_External.tasks  # noqa: F401
+import Galaxea_Lab_External.tasks
 
 
 def main():
@@ -46,6 +50,9 @@ def main():
     )
     # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
+
+    # sample_every_n_steps = max(int(sample_period / env.step_dt), 1)
+    print("env type: ", type(env))
 
     # print info (this is vectorized environment)
     print(f"[INFO]: Gym observation space: {env.observation_space}")
@@ -60,7 +67,12 @@ def main():
             actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
             # apply actions
             obs, reward, terminated, truncated, info = env.step(actions)
+
+            print(f"Terminated: {terminated}")
+            print(f"Truncated: {truncated}")
             # env.step(actions)
+            # if terminated or truncated:
+            #     env.reset()
 
     # close the simulator
     env.close()

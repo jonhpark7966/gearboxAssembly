@@ -69,3 +69,10 @@ tests/
 
 # Docker history
 .isaac-lab-docker-history
+
+# Saved data
+data/*
+log
+
+# Training model
+ckpt

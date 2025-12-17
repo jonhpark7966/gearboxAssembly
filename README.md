@@ -8,8 +8,6 @@ The Gearbox Assembly Assistance Challenge evaluates bimanual robotic systems in 
 
 In this project, we setup a Isaac Lab environment for the Galaxea R1 gearbox assembly task. 
 
-
-
 ## Installation
 ### ⚙️ Model File Management Instructions
 
@@ -43,9 +41,11 @@ The **gearbox part models (`.usd` files)** within this repository are managed us
 
     **Please ensure these steps are completed before attempting to compile or run any code that depends on the `.usd` model files.**
 
+**Due to LFS bandwidth limits, the LFS files may fail to download. As an alternative, download the LFS files by clicking [this link](https://drive.google.com/file/d/1L7u89xxiHGkd72CzvZln3P5uPPqMu7b7/view?usp=drive_link), extract it, and place its contents into `gearboxAssembly/source/Galaxea_Lab_External/assets`.**
+
 ---
 ### Installation Steps
-- Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
+- Install Isaac Lab 2.3.0 with Isaac Sim 5.0.0 by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
   We recommend using the conda installation as it simplifies calling Python scripts from the terminal.
 
 - Clone or copy this project/repository separately from the Isaac Lab installation (i.e. outside the `IsaacLab` directory):
@@ -88,7 +88,13 @@ The **gearbox part models (`.usd` files)** within this repository are managed us
 - **Running the R1 gearbox assembly task with rule-based agent**
     ```bash
     # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
-     python scripts/rule_based_agent.py --task=Template-Galaxea-Lab-External-Direct-v0 --enable_cameras
+    python scripts/rule_based_agent.py --task=Template-Galaxea-Lab-External-Direct-v0 --enable_cameras
+    ```
+
+- **Running the R1 gearbox assembly task with ACT agent**
+    ```bash
+    # use 'FULL_PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
+    python scripts/VLA_agent.py --task=Template-Galaxea-Lab-Agent-Direct-v0 --enable_cameras --checkpoint='Your-VLA-Checkpoint-File-Path'
     ```
 
 ### Set up IDE (Optional)
@@ -119,20 +125,6 @@ To enable your extension, follow these steps:
     - Find your extension under the `Third Party` category.
     - Toggle it to enable your extension.
 
-## Code formatting
-
-We have a pre-commit template to automatically format your code.
-To install pre-commit:
-
-```bash
-pip install pre-commit
-```
-
-Then you can run pre-commit with:
-
-```bash
-pre-commit run --all-files
-```
 
 ## Troubleshooting
 
