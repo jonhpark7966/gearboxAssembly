@@ -9,6 +9,7 @@ from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import DirectRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
+from isaaclab.sim.schemas.schemas_cfg import ArticulationRootPropertiesCfg
 from isaaclab.utils import configclass
 from isaaclab.sensors import CameraCfg
 import math
@@ -59,7 +60,12 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
     robot_cfg: ArticulationCfg = GALAXEA_R1_CHALLENGE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
     # table_cfg: AssetBaseCfg = TABLE_CFG.copy()
-    table_cfg: RigidObjectCfg = TABLE_CFG.replace(prim_path="/World/envs/env_.*/Table")
+    table_cfg: RigidObjectCfg = TABLE_CFG.replace(
+        prim_path="/World/envs/env_.*/Table",
+        spawn=TABLE_CFG.spawn.replace(
+            articulation_props=ArticulationRootPropertiesCfg(articulation_enabled=False)
+        ),
+    )
 
     ring_gear_cfg: RigidObjectCfg = RING_GEAR_CFG.replace(prim_path="/World/envs/env_.*/ring_gear",
                                                                        init_state=RigidObjectCfg.InitialStateCfg(

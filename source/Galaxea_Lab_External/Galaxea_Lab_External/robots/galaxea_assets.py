@@ -215,10 +215,13 @@ TABLE_CFG = RigidObjectCfg(
         usd_path=f"{GALAXEA_LAB_ASSETS_DIR}/Props/table/desk.usd",
         scale=(0.01, 0.01, 0.0135),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
-        disable_gravity=True,  # 禁用重力，确保桌子不会因重力移动
-        kinematic_enabled=True,
-        retain_accelerations=False,  # 防止物体在碰撞后受到加速度影响
-    ),
+            disable_gravity=True,  # 禁用重力，确保桌子不会因重力移动
+            kinematic_enabled=True,
+            retain_accelerations=False,  # 防止物体在碰撞后受到加速度影响
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            articulation_enabled=False
+        ),
     ),
 )
 

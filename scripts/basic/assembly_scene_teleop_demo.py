@@ -52,7 +52,7 @@ import isaacsim.core.utils.torch as torch_utils
 import isaaclab.sim as sim_utils
 
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg, ArticulationRootPropertiesCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
@@ -154,7 +154,11 @@ class R1SceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=1000.0, color=(0.75, 0.75, 0.75)),
     )
 
-    table: AssetBaseCfg = TABLE_CFG.copy()
+    table: RigidObjectCfg = TABLE_CFG.replace(
+        spawn=TABLE_CFG.spawn.replace(
+            articulation_props=ArticulationRootPropertiesCfg(articulation_enabled=False)
+        )
+    )
 
     robot: ArticulationCfg = GALAXEA_R1_CHALLENGE_CFG.copy()
 
@@ -1168,7 +1172,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     udp = EETargetsReceiver(bind_ip="0.0.0.0", port=5005, timeout_s=0.5)
     udp.start()
     print("[INFO] UDP receiver listening on port 5005 for ee_targets v1")
-    print("[INFO] Expected: {v,type=\"ee_targets\",seq,t,frame,clutch,precision,reset,arms:[...]}")
+print("[INFO] Expected: {v,type=\"ee_targets\",seq,t,frame,precision?,arms:[...]}")
     print("="*80 + "\n")
 
     # === Joint Angle Offsets===
@@ -1494,8 +1498,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             save_pending = True
             recording_count = 0  # Reset counter
 
-        state, age, reset_edge = udp.get_latest()
-        commands = cmd_filter.update(state, reset_edge)
+        state, age = udp.get_latest()
+        commands = cmd_filter.update(state)
 
         if teleop_mode and commands:
             for cmd in commands:
@@ -1513,13 +1517,10 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     right_rad = r_cmd[0].detach().cpu().numpy()
 
             if commands and count % 50 == 0:
-                status = ", ".join(
-                    f"{c.id}: clutch={int(c.clutch)} prec={int(c.precision)} mode={c.mode}"
-                    for c in commands
-                )
+                status = ", ".join(f"{c.id}: prec={int(c.precision)}" for c in commands)
                 print(f"[TELEOP] {status}")
         elif teleop_mode and count % 100 == 0:
-            print(f"[WARN] No teleoperation data received (timeout or clutch=0)")
+            print(f"[WARN] No teleoperation data received (timeout)")
 
 
         if not teleop_mode:
