@@ -424,6 +424,8 @@ def main() -> None:
                     f"[UDP] seq={state.seq} age={age:.3f}s frame={state.frame} precision={prec} | "
                     + " | ".join(arm_summaries)
                 )
+                if args_cli.log_payload:
+                    print(f"[UDP_RAW] {json.dumps(state.raw)}")
                 last_logged_seq = state.seq
             now = time.time()
             if waiting_for_first_packet and not state:
