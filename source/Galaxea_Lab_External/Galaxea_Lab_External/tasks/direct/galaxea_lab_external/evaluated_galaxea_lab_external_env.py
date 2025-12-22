@@ -20,15 +20,6 @@ class EvaluatedGalaxeaLabExternalEnv(GalaxeaLabExternalEnv):
     for each step of the assembly process, without modifying the original class.
     """
     
-    def step(self, action):
-        terminated_before, truncated_before = self._get_dones()
-        terminated_before_reset = terminated_before.clone()
-        truncated_before_reset = truncated_before.clone()
-        
-        obs_buf, reward_buf, _, _, extras = super().step(action)
-        
-        return obs_buf, reward_buf, terminated_before_reset, truncated_before_reset, extras
-
     def evaluate_gear_mounted_to_pin(self, gear_id: int) -> bool:
         """특정 기어(1~4)가 핀에 올바르게 장착되었는지 평가
         
