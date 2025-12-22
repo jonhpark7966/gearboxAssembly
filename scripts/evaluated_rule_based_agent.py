@@ -124,92 +124,16 @@ def main():
     # simulate environment
     while simulation_app.is_running():
         with torch.inference_mode():
-            dummy_action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
-            
-            obs, reward, terminated, truncated, info = env.step(dummy_action)
-            
             rule_policy = env.unwrapped.rule_policy
 
-            count_int = int(rule_policy.count)
-            step_2_end = int(rule_policy.count_step_2[-1].item())
-            step_4_end = int(rule_policy.count_step_4[-1].item())
-            step_7_end = int(rule_policy.count_step_7[-1].item())
-            step_9_end = int(rule_policy.count_step_9[-1].item())
-            step_12_end = int(rule_policy.count_step_12[-1].item())
-            step_14_end = int(rule_policy.count_step_14[-1].item())
-
-            if (count_int >= step_2_end and 
-                not step_state["waiting_for_evaluation"] and 
-                step_state["current_step_name"] != "mount_gear_1" and 
-                not step_state.get("mount_gear_1_triggered", False)):
-                print(f"[STEP] Detected mount_gear_1 completion: count={count_int}, step_2_end={step_2_end}")
-                step_state["mount_gear_1_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_gear_1"
-                rule_policy.completed_gear_id = 1
-            elif (count_int >= step_4_end and 
-                  not step_state["waiting_for_evaluation"] and 
-                  step_state["current_step_name"] != "mount_gear_2" and 
-                  not step_state.get("mount_gear_2_triggered", False)):
-                print(f"[STEP] Detected mount_gear_2 completion: count={count_int}, step_4_end={step_4_end}")
-                step_state["mount_gear_2_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_gear_2"
-                rule_policy.completed_gear_id = 2
-            elif (count_int >= step_7_end and 
-                  not step_state["waiting_for_evaluation"] and 
-                  step_state["current_step_name"] != "mount_gear_3" and 
-                  not step_state.get("mount_gear_3_triggered", False)):
-                print(f"[STEP] Detected mount_gear_3 completion: count={count_int}, step_7_end={step_7_end}")
-                step_state["mount_gear_3_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_gear_3"
-                rule_policy.completed_gear_id = 3
-            elif (count_int >= step_9_end and 
-                  not step_state["waiting_for_evaluation"] and 
-                  step_state["current_step_name"] != "mount_gear_4" and 
-                  not step_state.get("mount_gear_4_triggered", False)):
-                print(f"[STEP] Detected mount_gear_4 completion: count={count_int}, step_9_end={step_9_end}")
-                step_state["mount_gear_4_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_gear_4"
-                rule_policy.completed_gear_id = 4
-            elif (count_int >= step_12_end and 
-                  not step_state["waiting_for_evaluation"] and 
-                  step_state["current_step_name"] != "mount_carrier_to_ring" and 
-                  not step_state.get("mount_carrier_to_ring_triggered", False)):
-                print(f"[STEP] Detected mount_carrier_to_ring completion: count={count_int}, step_12_end={step_12_end}")
-                step_state["mount_carrier_to_ring_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_carrier_to_ring"
-                rule_policy.completed_gear_id = None
-            elif (count_int >= step_14_end and 
-                  not step_state["waiting_for_evaluation"] and 
-                  step_state["current_step_name"] != "mount_reducer" and 
-                  not step_state.get("mount_reducer_triggered", False)):
-                print(f"[STEP] Detected mount_reducer completion: count={count_int}, step_14_end={step_14_end}")
-                step_state["mount_reducer_triggered"] = True
-                rule_policy.step_completed = True
-                rule_policy.completed_step_name = "mount_reducer"
-                rule_policy.completed_gear_id = None
-            
-            # 단계별 완료 확인
-            if hasattr(rule_policy, 'step_completed') and rule_policy.step_completed:
-                step_name = rule_policy.completed_step_name
-                step_state["waiting_for_evaluation"] = True
-                step_state["evaluation_delay_steps"] = args_cli.evaluation_delay_steps
-                step_state["current_step_name"] = step_name
-                print(f"[STEP] Starting evaluation wait: {args_cli.evaluation_delay_steps} steps")
-                rule_policy.step_completed = False  # Reset flag
-            
-            # Handle evaluation waiting
+            # 1) 평가 대기 상태일 때는 env.step()을 호출하지 않고,
+            #    현재 상태를 고정한 채로 delay 카운트와 평가만 수행.
             if step_state["waiting_for_evaluation"]:
                 step_state["evaluation_delay_steps"] -= 1
                 if step_state["evaluation_delay_steps"] <= 0:
-                    # evaluation 수행
                     step_name = step_state["current_step_name"]
                     eval_func = STEP_EVALUATION_MAP.get(step_name)
-                    
+
                     if eval_func:
                         print(f"[EVAL] Evaluating {step_name}...")
                         try:
@@ -220,30 +144,28 @@ def main():
                             import traceback
                             traceback.print_exc()
                             success = False
-                        
+
                         if success:
                             step_state["waiting_for_evaluation"] = False
-                            step_state["current_step_name"] = None 
+                            step_state["current_step_name"] = None
                             if step_name in step_state["retry_count"]:
                                 del step_state["retry_count"][step_name]
-                            
+
                             # Track successful step completion
                             episode_state["completed_steps"].add(step_name)
                             print(f"[STEP] ✓ {step_name} completed successfully, proceeding to next step")
-                            
+
                             # Check if all required steps are completed
                             if episode_state["completed_steps"] == episode_state["required_steps"]:
                                 episode_state["all_steps_completed"] = True
-                                # terminated = torch.tensor([True], device=env.unwrapped.device)
-                                # truncated = torch.tensor([True], device=env.unwrapped.device)
                                 print(f"[EPISODE] ✓ All steps completed successfully!")
                         else:
                             # Failure: retry
                             if step_name not in step_state["retry_count"]:
                                 step_state["retry_count"][step_name] = 0
-                            
+
                             step_state["retry_count"][step_name] += 1
-                            
+
                             if step_state["retry_count"][step_name] < step_state["max_retries"]:
                                 # Restart current step
                                 rule_policy.restart_step(step_name)
@@ -252,17 +174,24 @@ def main():
                                 trigger_key = f"{step_name}_triggered"
                                 if trigger_key in step_state:
                                     del step_state[trigger_key]
-                                print(f"[RETRY] {step_name} (attempt {step_state['retry_count'][step_name]}/{step_state['max_retries']})")
+                                print(
+                                    f"[RETRY] {step_name} "
+                                    f"(attempt {step_state['retry_count'][step_name]}/{step_state['max_retries']})"
+                                )
                             else:
                                 # Max retries exceeded - episode failed
-                                # env 리셋하고 다시 시작
-                                print(f"[EPISODE] ✗ Max retries ({step_state['max_retries']}) exceeded for {step_name}. Episode failed.")
-                                print(f"[EPISODE] Resetting environment immediately to start fresh episode...")
-                                
+                                print(
+                                    f"[EPISODE] ✗ Max retries ({step_state['max_retries']}) "
+                                    f"exceeded for {step_name}. Episode failed."
+                                )
+                                print(
+                                    "[EPISODE] Resetting environment immediately to start fresh episode..."
+                                )
+
                                 # Reset environment completely (random reset)
                                 env.reset()
                                 replace_rule_policy_with_evaluated(env)
-                                
+
                                 # Reset all state
                                 episode_state["all_steps_completed"] = False
                                 episode_state["episode_failed"] = False
@@ -273,26 +202,126 @@ def main():
                                 for key in list(step_state.keys()):
                                     if key.endswith("_triggered"):
                                         del step_state[key]
-                                
-                                print(f"[EPISODE] Environment reset complete. Starting fresh episode with clean data...")
-                            
-                            step_state["waiting_for_evaluation"] = False
+
+                                print(
+                                    "[EPISODE] Environment reset complete. "
+                                    "Starting fresh episode with clean data..."
+                                )
+
                     else:
                         print(f"[WARN] No evaluation function for step: {step_name}")
                         step_state["waiting_for_evaluation"] = False
 
-            # Check episode completion
+                # 평가 대기 중에는 env.step()을 호출하지 않고 다음 루프로 넘어간다.
+                continue
+
+            # 2) 평가 대기 상태가 아닐 때만 env.step()을 호출해서 정책을 진행.
+            dummy_action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
+            obs, reward, terminated, truncated, info = env.step(dummy_action)
+
+            count_int = int(rule_policy.count)
+            step_2_end = int(rule_policy.count_step_2[-1].item())
+            step_4_end = int(rule_policy.count_step_4[-1].item())
+            step_7_end = int(rule_policy.count_step_7[-1].item())
+            step_9_end = int(rule_policy.count_step_9[-1].item())
+            step_12_end = int(rule_policy.count_step_12[-1].item())
+            step_14_end = int(rule_policy.count_step_14[-1].item())
+
+            if (
+                count_int >= step_2_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_gear_1"
+                and not step_state.get("mount_gear_1_triggered", False)
+            ):
+                print(f"[STEP] Detected mount_gear_1 completion: count={count_int}, step_2_end={step_2_end}")
+                step_state["mount_gear_1_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_gear_1"
+                rule_policy.completed_gear_id = 1
+            elif (
+                count_int >= step_4_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_gear_2"
+                and not step_state.get("mount_gear_2_triggered", False)
+            ):
+                print(f"[STEP] Detected mount_gear_2 completion: count={count_int}, step_4_end={step_4_end}")
+                step_state["mount_gear_2_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_gear_2"
+                rule_policy.completed_gear_id = 2
+            elif (
+                count_int >= step_7_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_gear_3"
+                and not step_state.get("mount_gear_3_triggered", False)
+            ):
+                print(f"[STEP] Detected mount_gear_3 completion: count={count_int}, step_7_end={step_7_end}")
+                step_state["mount_gear_3_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_gear_3"
+                rule_policy.completed_gear_id = 3
+            elif (
+                count_int >= step_9_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_gear_4"
+                and not step_state.get("mount_gear_4_triggered", False)
+            ):
+                print(f"[STEP] Detected mount_gear_4 completion: count={count_int}, step_9_end={step_9_end}")
+                step_state["mount_gear_4_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_gear_4"
+                rule_policy.completed_gear_id = 4
+            elif (
+                count_int >= step_12_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_carrier_to_ring"
+                and not step_state.get("mount_carrier_to_ring_triggered", False)
+            ):
+                print(
+                    f"[STEP] Detected mount_carrier_to_ring completion: "
+                    f"count={count_int}, step_12_end={step_12_end}"
+                )
+                step_state["mount_carrier_to_ring_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_carrier_to_ring"
+                rule_policy.completed_gear_id = None
+            elif (
+                count_int >= step_14_end
+                and not step_state["waiting_for_evaluation"]
+                and step_state["current_step_name"] != "mount_reducer"
+                and not step_state.get("mount_reducer_triggered", False)
+            ):
+                print(f"[STEP] Detected mount_reducer completion: count={count_int}, step_14_end={step_14_end}")
+                step_state["mount_reducer_triggered"] = True
+                rule_policy.step_completed = True
+                rule_policy.completed_step_name = "mount_reducer"
+                rule_policy.completed_gear_id = None
+
+            # 단계별 완료 확인: 이 iteration에서 step 완료가 감지되면,
+            # 다음 루프부터 평가 대기 모드로 진입.
+            if hasattr(rule_policy, "step_completed") and rule_policy.step_completed:
+                step_name = rule_policy.completed_step_name
+                step_state["waiting_for_evaluation"] = True
+                step_state["evaluation_delay_steps"] = args_cli.evaluation_delay_steps
+                step_state["current_step_name"] = step_name
+                print(f"[STEP] Starting evaluation wait: {args_cli.evaluation_delay_steps} steps")
+                rule_policy.step_completed = False  # Reset flag
+
+            # 에피소드 종료 처리 (평가 대기 모드가 아닐 때만)
             if terminated.any() or truncated.any():
                 print(f"[INFO] Episode terminated: terminated={terminated}, truncated={truncated}")
-                
+
                 # Log episode result
                 if episode_state["all_steps_completed"]:
                     print(f"[EPISODE] ✓ Episode completed successfully!")
                 elif episode_state["episode_failed"]:
                     print(f"[EPISODE] ✗ Episode failed.")
                 else:
-                    print(f"[EPISODE] Episode ended but not all steps completed (timeout or other reason).")
-                
+                    print(
+                        "[EPISODE] Episode ended but not all steps completed "
+                        "(timeout or other reason)."
+                    )
+
                 # Reset for next episode (same for all cases)
                 env.reset()
                 replace_rule_policy_with_evaluated(env)
