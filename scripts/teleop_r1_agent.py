@@ -92,6 +92,17 @@ parser.add_argument(
     default="./logs/teleop_debug",
     help="Directory to save debug logs",
 )
+parser.add_argument(
+    "--verbose",
+    action="store_true",
+    help="Print verbose debug info to console every frame",
+)
+parser.add_argument(
+    "--verbose_frames",
+    type=int,
+    default=200,
+    help="Number of frames to print verbose output (default: 200)",
+)
 
 # Add AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
@@ -121,6 +132,8 @@ from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms, quat_mul, quat_inv, quat_apply
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+import isaaclab.sim as sim_utils
 
 # Import the task module to register the environment
 import Galaxea_Lab_External.tasks  # noqa: F401
@@ -128,6 +141,29 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 # Import data recorder
 from teleop_data_recorder import TeleopDataRecorder
+
+# Hand marker configuration
+HAND_MARKER_CFG = VisualizationMarkersCfg(
+    prim_path="/Visuals/HandMarkers",
+    markers={
+        "left_hand": sim_utils.SphereCfg(
+            radius=0.03,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), opacity=0.7),
+        ),
+        "right_hand": sim_utils.SphereCfg(
+            radius=0.03,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=0.7),
+        ),
+        "left_target": sim_utils.SphereCfg(
+            radius=0.02,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 1.0), opacity=0.5),
+        ),
+        "right_target": sim_utils.SphereCfg(
+            radius=0.02,
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), opacity=0.5),
+        ),
+    },
+)
 
 logger = logging.getLogger(__name__)
 
@@ -407,6 +443,19 @@ def main() -> None:
     right_quat_offset = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
     need_reanchor = True
 
+    # Hand marker visualization
+    hand_markers = None
+    if args_cli.hand_markers:
+        try:
+            hand_markers = VisualizationMarkers(HAND_MARKER_CFG)
+            print("[Teleop] Hand markers enabled - Blue=Left, Red=Right, Cyan=LeftTarget, Yellow=RightTarget")
+        except Exception as e:
+            logger.warning(f"Failed to create hand markers: {e}")
+            hand_markers = None
+
+    # Verbose frame counter
+    verbose_frame_count = 0
+
     # Data recorder
     recorder = TeleopDataRecorder(
         save_dir=args_cli.record_dir,
@@ -414,11 +463,15 @@ def main() -> None:
         record_depth=False,
     ) if args_cli.record else None
 
+    # First action diagnostic flag
+    first_action_printed = False
+
     # Callback handlers
     def start_teleoperation() -> None:
-        nonlocal teleoperation_active, is_recording, need_reanchor
+        nonlocal teleoperation_active, is_recording, need_reanchor, first_action_printed
         teleoperation_active = True
         need_reanchor = True  # Reanchor on next frame
+        first_action_printed = False  # Reset to print first action after start
         if recorder and args_cli.record:
             recorder.start_recording()
             is_recording = True
@@ -453,6 +506,19 @@ def main() -> None:
     teleop_interface = None
     try:
         if hasattr(env_cfg, "teleop_devices") and args_cli.teleop_device in env_cfg.teleop_devices.devices:
+            # Print diagnostic info about teleop device configuration
+            device_cfg = env_cfg.teleop_devices.devices[args_cli.teleop_device]
+            print(f"\n[Teleop] === Device Configuration ===")
+            print(f"[Teleop] Device: {args_cli.teleop_device}")
+            if hasattr(device_cfg, "retargeters"):
+                print(f"[Teleop] Retargeters ({len(device_cfg.retargeters)}):")
+                for i, ret_cfg in enumerate(device_cfg.retargeters):
+                    ret_type = type(ret_cfg).__name__
+                    bound_hand = getattr(ret_cfg, "bound_hand", "N/A")
+                    print(f"[Teleop]   [{i}] {ret_type} -> {bound_hand}")
+                print(f"[Teleop] Expected output: 16D = [L_pos(3), L_quat(4), L_grip(1), R_pos(3), R_quat(4), R_grip(1)]")
+            print(f"[Teleop] ==============================\n")
+
             teleop_interface = create_teleop_device(
                 args_cli.teleop_device,
                 env_cfg.teleop_devices.devices,
@@ -513,6 +579,22 @@ def main() -> None:
                     # Log raw action for debugging
                     debug_logger.log_raw_action(raw_action)
 
+                    # Print first action diagnostics
+                    if not first_action_printed:
+                        first_action_printed = True
+                        print(f"\n[Teleop] === First Action Diagnostic ===")
+                        print(f"[Teleop] raw_action.shape = {raw_action.shape}")
+                        print(f"[Teleop] raw_action.dtype = {raw_action.dtype}")
+                        print(f"[Teleop] raw_action values:")
+                        arr = raw_action.cpu().numpy().flatten()
+                        print(f"[Teleop]   [0:3]   L_pos  = {arr[0:3]}")
+                        print(f"[Teleop]   [3:7]   L_quat = {arr[3:7]} (wxyz)")
+                        print(f"[Teleop]   [7:8]   L_grip = {arr[7:8]} (-1=close, +1=open)")
+                        print(f"[Teleop]   [8:11]  R_pos  = {arr[8:11]}")
+                        print(f"[Teleop]   [11:15] R_quat = {arr[11:15]} (wxyz)")
+                        print(f"[Teleop]   [15:16] R_grip = {arr[15:16]} (-1=close, +1=open)")
+                        print(f"[Teleop] =====================================\n")
+
                     # Parse the teleop output
                     # The Se3AbsRetargeter outputs: [pos(3), quat(4)]
                     # The GripperRetargeter outputs: [grip(1)]
@@ -552,6 +634,32 @@ def main() -> None:
                     # Log parsed values
                     debug_logger.log_parsed(left_pos, left_quat, left_grip, right_pos, right_quat, right_grip)
 
+                    # Verbose console logging (first N frames)
+                    if args_cli.verbose and verbose_frame_count < args_cli.verbose_frames:
+                        lp = left_pos[0].cpu().numpy()
+                        lq = left_quat[0].cpu().numpy()
+                        lg = left_grip[0].cpu().numpy()
+                        rp = right_pos[0].cpu().numpy()
+                        rq = right_quat[0].cpu().numpy()
+                        rg = right_grip[0].cpu().numpy()
+                        print(f"[{verbose_frame_count:04d}] L_pos=[{lp[0]:.3f},{lp[1]:.3f},{lp[2]:.3f}] "
+                              f"L_grip={lg[0]:+.2f} R_pos=[{rp[0]:.3f},{rp[1]:.3f},{rp[2]:.3f}] "
+                              f"R_grip={rg[0]:+.2f}")
+                        verbose_frame_count += 1
+                        if verbose_frame_count == args_cli.verbose_frames:
+                            print(f"[Teleop] Verbose logging stopped after {args_cli.verbose_frames} frames")
+
+                    # Update hand markers (raw XR positions - before reanchoring)
+                    if hand_markers is not None:
+                        # Create marker positions tensor: [left_hand, right_hand, left_target, right_target]
+                        marker_positions = torch.zeros(4, 3, device=device)
+                        marker_orientations = torch.zeros(4, 4, device=device)
+                        marker_orientations[:, 0] = 1.0  # Identity quaternion (w=1)
+
+                        # Raw XR hand positions
+                        marker_positions[0] = left_pos[0]
+                        marker_positions[1] = right_pos[0]
+
                     # Reanchor: calculate position and orientation offset to match current robot pose
                     if need_reanchor:
                         robot = env.robot
@@ -587,6 +695,14 @@ def main() -> None:
 
                     # Log targets
                     debug_logger.log_targets(left_pos_target, left_quat_target, right_pos_target, right_quat_target)
+
+                    # Update hand markers with target positions
+                    if hand_markers is not None:
+                        marker_positions[2] = left_pos_target[0]
+                        marker_positions[3] = right_pos_target[0]
+                        # Visualize markers
+                        marker_indices = torch.tensor([0, 1, 2, 3], device=device)
+                        hand_markers.visualize(marker_positions, marker_orientations, marker_indices)
 
                     # Compute IK for both arms (now with corrected orientation)
                     left_joint_targets = compute_ik(
