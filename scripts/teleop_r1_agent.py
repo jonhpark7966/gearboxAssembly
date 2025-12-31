@@ -66,6 +66,23 @@ parser.add_argument(
     help="Gripper close position (meters)",
 )
 parser.add_argument(
+    "--pinch_close_dist",
+    type=float,
+    default=0.02,
+    help="Pinch distance (meters) for gripper fully closed (default: 0.02)",
+)
+parser.add_argument(
+    "--pinch_open_dist",
+    type=float,
+    default=0.06,
+    help="Pinch distance (meters) for gripper fully open (default: 0.06)",
+)
+parser.add_argument(
+    "--use_raw_grip",
+    action="store_true",
+    help="Use raw finger distance for gripper instead of retargeter (smoother, no hysteresis)",
+)
+parser.add_argument(
     "--record",
     action="store_true",
     help="Enable data recording",
@@ -388,6 +405,42 @@ def map_grip_to_joint(grip: float, open_pos: float, close_pos: float) -> float:
     return close_pos + normalized * (open_pos - close_pos)
 
 
+def compute_grip_from_finger_distance(
+    thumb_pos: np.ndarray,
+    index_pos: np.ndarray,
+    close_dist: float,
+    open_dist: float,
+) -> float:
+    """Compute normalized grip value from raw finger distance.
+
+    This bypasses the GripperRetargeter's hysteresis-based approach and provides
+    smooth, continuous gripper control based on actual finger distance.
+
+    Args:
+        thumb_pos: 3D position of thumb tip (meters).
+        index_pos: 3D position of index tip (meters).
+        close_dist: Finger distance (meters) for fully closed gripper.
+        open_dist: Finger distance (meters) for fully open gripper.
+
+    Returns:
+        Grip value in [-1, +1] where -1=close, +1=open.
+    """
+    distance = np.linalg.norm(thumb_pos - index_pos)
+
+    # Map distance to [-1, +1] range
+    # distance <= close_dist -> -1.0 (close)
+    # distance >= open_dist -> +1.0 (open)
+    # linear interpolation in between
+    if distance <= close_dist:
+        return -1.0
+    elif distance >= open_dist:
+        return 1.0
+    else:
+        # Linear interpolation: close_dist -> -1.0, open_dist -> +1.0
+        normalized = (distance - close_dist) / (open_dist - close_dist)
+        return -1.0 + 2.0 * normalized
+
+
 def main() -> None:
     """Main teleoperation loop."""
 
@@ -552,6 +605,11 @@ def main() -> None:
 
     print(f"[Teleop] Using device: {teleop_interface}")
     print(f"[Teleop] Gripper range: {args_cli.gripper_close} (close) - {args_cli.gripper_open} (open)")
+    if args_cli.use_raw_grip:
+        print(f"[Teleop] Gripper mode: RAW (smooth, pinch distance: {args_cli.pinch_close_dist}m close / {args_cli.pinch_open_dist}m open)")
+    else:
+        print("[Teleop] Gripper mode: RETARGETER (hysteresis, 0.03m close / 0.05m open)")
+        print("[Teleop] Tip: Use --use_raw_grip for smoother gripper control")
 
     # Reset environment
     obs, _ = env.reset()
@@ -756,6 +814,33 @@ def main() -> None:
                     )
 
                     # Map grip to gripper joint position
+                    # Option 1: Use retargeter output (with hysteresis)
+                    # Option 2: Use raw finger distance (smooth, no hysteresis)
+                    if args_cli.use_raw_grip and isinstance(teleop_interface, OpenXRDevice):
+                        # Get raw XR data for finger positions
+                        xr_raw = teleop_interface._get_raw_data()
+                        if xr_raw is not None:
+                            left_hand_data = xr_raw.get(DeviceBase.TrackingTarget.HAND_LEFT)
+                            right_hand_data = xr_raw.get(DeviceBase.TrackingTarget.HAND_RIGHT)
+
+                            if left_hand_data is not None:
+                                left_grip_raw = compute_grip_from_finger_distance(
+                                    left_hand_data["thumb_tip"][:3],
+                                    left_hand_data["index_tip"][:3],
+                                    args_cli.pinch_close_dist,
+                                    args_cli.pinch_open_dist,
+                                )
+                                left_grip = torch.tensor([[left_grip_raw]], device=device)
+
+                            if right_hand_data is not None:
+                                right_grip_raw = compute_grip_from_finger_distance(
+                                    right_hand_data["thumb_tip"][:3],
+                                    right_hand_data["index_tip"][:3],
+                                    args_cli.pinch_close_dist,
+                                    args_cli.pinch_open_dist,
+                                )
+                                right_grip = torch.tensor([[right_grip_raw]], device=device)
+
                     # GripperRetargeter: -1 (close) / +1 (open)
                     left_gripper_target = map_grip_to_joint(
                         left_grip.squeeze(-1),

@@ -162,10 +162,10 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                     # [0:7] Left hand pose tracking
                     Se3AbsRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_LEFT,
-                        zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
-                        use_wrist_rotation=False,   # Use finger average (more stable)
-                        use_wrist_position=True,    # Use wrist position
-                        enable_visualization=False, # Off by default (teleop script can visualize targets/markers)
+                        zero_out_xy_rotation=False,  # Allow full 3-DOF rotation (pitch/roll/yaw)
+                        use_wrist_rotation=True,     # Use wrist rotation for accurate tracking
+                        use_wrist_position=True,     # Use wrist position
+                        enable_visualization=False,  # Off by default (teleop script can visualize targets/markers)
                     ),
                     # [7:8] Left gripper control
                     GripperRetargeterCfg(
@@ -174,10 +174,10 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                     # [8:15] Right hand pose tracking
                     Se3AbsRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_RIGHT,
-                        zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
-                        use_wrist_rotation=False,   # Use finger average (more stable)
-                        use_wrist_position=True,    # Use wrist position
-                        enable_visualization=False, # Off by default (teleop script can visualize targets/markers)
+                        zero_out_xy_rotation=False,  # Allow full 3-DOF rotation (pitch/roll/yaw)
+                        use_wrist_rotation=True,     # Use wrist rotation for accurate tracking
+                        use_wrist_position=True,     # Use wrist position
+                        enable_visualization=False,  # Off by default (teleop script can visualize targets/markers)
                     ),
                     # [15:16] Right gripper control
                     GripperRetargeterCfg(
