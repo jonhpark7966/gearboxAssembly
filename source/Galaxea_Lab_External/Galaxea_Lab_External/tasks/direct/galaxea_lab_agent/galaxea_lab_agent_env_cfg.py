@@ -161,7 +161,7 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                         zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
                         use_wrist_rotation=False,   # Use finger average (more stable)
                         use_wrist_position=True,    # Use wrist position
-                        enable_visualization=True,  # Show target frame marker
+                        enable_visualization=False, # Disabled due to IsaacLab bug in _update_visualization
                     ),
                     # [7:8] Left gripper control
                     GripperRetargeterCfg(
@@ -173,7 +173,7 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                         zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
                         use_wrist_rotation=False,   # Use finger average (more stable)
                         use_wrist_position=True,    # Use wrist position
-                        enable_visualization=True,  # Show target frame marker
+                        enable_visualization=False, # Disabled due to IsaacLab bug in _update_visualization
                     ),
                     # [15:16] Right gripper control
                     GripperRetargeterCfg(
