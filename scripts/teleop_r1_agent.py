@@ -700,9 +700,13 @@ def main() -> None:
                     if hand_markers is not None:
                         marker_positions[2] = left_pos_target[0]
                         marker_positions[3] = right_pos_target[0]
-                        # Visualize markers
+                        # Visualize markers using keyword arguments
                         marker_indices = torch.tensor([0, 1, 2, 3], device=device)
-                        hand_markers.visualize(marker_positions, marker_orientations, marker_indices)
+                        hand_markers.visualize(
+                            translations=marker_positions,
+                            orientations=marker_orientations,
+                            marker_indices=marker_indices
+                        )
 
                     # Compute IK for both arms (now with corrected orientation)
                     left_joint_targets = compute_ik(
