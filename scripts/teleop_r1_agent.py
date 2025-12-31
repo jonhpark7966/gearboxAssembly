@@ -830,7 +830,7 @@ def main() -> None:
                                     args_cli.pinch_close_dist,
                                     args_cli.pinch_open_dist,
                                 )
-                                left_grip = torch.tensor([[left_grip_raw]], device=device)
+                                left_grip = torch.tensor([[left_grip_raw]], dtype=torch.float32, device=device)
 
                             if right_hand_data is not None:
                                 right_grip_raw = compute_grip_from_finger_distance(
@@ -839,7 +839,7 @@ def main() -> None:
                                     args_cli.pinch_close_dist,
                                     args_cli.pinch_open_dist,
                                 )
-                                right_grip = torch.tensor([[right_grip_raw]], device=device)
+                                right_grip = torch.tensor([[right_grip_raw]], dtype=torch.float32, device=device)
 
                     # GripperRetargeter: -1 (close) / +1 (open)
                     left_gripper_target = map_grip_to_joint(
