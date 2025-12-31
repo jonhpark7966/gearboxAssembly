@@ -132,9 +132,6 @@ from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms, quat_mul, quat_inv, quat_apply
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-import isaaclab.sim as sim_utils
-
 # Import the task module to register the environment
 import Galaxea_Lab_External.tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
@@ -142,28 +139,8 @@ from isaaclab_tasks.utils import parse_env_cfg
 # Import data recorder
 from teleop_data_recorder import TeleopDataRecorder
 
-# Hand marker configuration
-HAND_MARKER_CFG = VisualizationMarkersCfg(
-    prim_path="/Visuals/HandMarkers",
-    markers={
-        "left_hand": sim_utils.SphereCfg(
-            radius=0.03,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 1.0), opacity=0.7),
-        ),
-        "right_hand": sim_utils.SphereCfg(
-            radius=0.03,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=0.7),
-        ),
-        "left_target": sim_utils.SphereCfg(
-            radius=0.02,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 1.0), opacity=0.5),
-        ),
-        "right_target": sim_utils.SphereCfg(
-            radius=0.02,
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 1.0, 0.0), opacity=0.5),
-        ),
-    },
-)
+# Note: Hand visualization is now handled by Se3AbsRetargeter with enable_visualization=True
+# This shows coordinate frame markers at the target end-effector positions
 
 logger = logging.getLogger(__name__)
 
@@ -443,15 +420,11 @@ def main() -> None:
     right_quat_offset = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
     need_reanchor = True
 
-    # Hand marker visualization
-    hand_markers = None
+    # Hand marker visualization is now handled by Se3AbsRetargeter with enable_visualization=True
+    # The retargeter shows coordinate frame markers at the target end-effector positions
     if args_cli.hand_markers:
-        try:
-            hand_markers = VisualizationMarkers(HAND_MARKER_CFG)
-            print("[Teleop] Hand markers enabled - Blue=Left, Red=Right, Cyan=LeftTarget, Yellow=RightTarget")
-        except Exception as e:
-            logger.warning(f"Failed to create hand markers: {e}")
-            hand_markers = None
+        print("[Teleop] Hand markers enabled via Se3AbsRetargeter's built-in visualization")
+        print("[Teleop] Coordinate frame markers will appear at target EE positions")
 
     # Verbose frame counter
     verbose_frame_count = 0
@@ -649,17 +622,6 @@ def main() -> None:
                         if verbose_frame_count == args_cli.debug_frames:
                             print(f"[Teleop] Debug console logging stopped after {args_cli.debug_frames} frames")
 
-                    # Update hand markers (raw XR positions - before reanchoring)
-                    if hand_markers is not None:
-                        # Create marker positions tensor: [left_hand, right_hand, left_target, right_target]
-                        marker_positions = torch.zeros(4, 3, device=device)
-                        marker_orientations = torch.zeros(4, 4, device=device)
-                        marker_orientations[:, 0] = 1.0  # Identity quaternion (w=1)
-
-                        # Raw XR hand positions
-                        marker_positions[0] = left_pos[0]
-                        marker_positions[1] = right_pos[0]
-
                     # Reanchor: calculate position and orientation offset to match current robot pose
                     if need_reanchor:
                         robot = env.robot
@@ -696,17 +658,8 @@ def main() -> None:
                     # Log targets
                     debug_logger.log_targets(left_pos_target, left_quat_target, right_pos_target, right_quat_target)
 
-                    # Update hand markers with target positions
-                    if hand_markers is not None:
-                        marker_positions[2] = left_pos_target[0]
-                        marker_positions[3] = right_pos_target[0]
-                        # Visualize markers using keyword arguments
-                        marker_indices = torch.tensor([0, 1, 2, 3], device=device)
-                        hand_markers.visualize(
-                            translations=marker_positions,
-                            orientations=marker_orientations,
-                            marker_indices=marker_indices
-                        )
+                    # Note: Hand markers are now shown by Se3AbsRetargeter's built-in visualization
+                    # when enable_visualization=True in the retargeter config
 
                     # Compute IK for both arms (now with corrected orientation)
                     left_joint_targets = compute_ik(

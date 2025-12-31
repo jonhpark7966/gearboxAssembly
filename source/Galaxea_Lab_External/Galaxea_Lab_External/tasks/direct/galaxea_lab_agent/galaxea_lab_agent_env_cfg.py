@@ -148,30 +148,34 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
     xr: XrCfg = XrCfg()
 
     # Teleoperation devices configuration for OpenXR hand tracking
+    # Output format: 16D = [L_pos(3), L_quat(4), L_grip(1), R_pos(3), R_quat(4), R_grip(1)]
+    # Gripper: -1.0 = close (pinch), +1.0 = open (fingers apart)
     teleop_devices: DevicesCfg = DevicesCfg(
         devices={
             "handtracking": OpenXRDeviceCfg(
                 xr_cfg=None,  # Will use environment's xr config
                 retargeters=[
-                    # Left hand pose tracking
+                    # [0:7] Left hand pose tracking
                     Se3AbsRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_LEFT,
-                        zero_out_xy_rotation=False,
-                        use_wrist_rotation=True,
-                        use_wrist_position=True,
+                        zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
+                        use_wrist_rotation=False,   # Use finger average (more stable)
+                        use_wrist_position=True,    # Use wrist position
+                        enable_visualization=True,  # Show target frame marker
                     ),
-                    # Left gripper control
+                    # [7:8] Left gripper control
                     GripperRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_LEFT,
                     ),
-                    # Right hand pose tracking
+                    # [8:15] Right hand pose tracking
                     Se3AbsRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_RIGHT,
-                        zero_out_xy_rotation=False,
-                        use_wrist_rotation=True,
-                        use_wrist_position=True,
+                        zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
+                        use_wrist_rotation=False,   # Use finger average (more stable)
+                        use_wrist_position=True,    # Use wrist position
+                        enable_visualization=True,  # Show target frame marker
                     ),
-                    # Right gripper control
+                    # [15:16] Right gripper control
                     GripperRetargeterCfg(
                         bound_hand=DeviceBase.TrackingTarget.HAND_RIGHT,
                     ),
