@@ -816,6 +816,8 @@ def main() -> None:
                     # Map grip to gripper joint position
                     # Option 1: Use retargeter output (with hysteresis)
                     # Option 2: Use raw finger distance (smooth, no hysteresis)
+                    left_finger_dist = None
+                    right_finger_dist = None
                     if args_cli.use_raw_grip and isinstance(teleop_interface, OpenXRDevice):
                         # Get raw XR data for finger positions
                         xr_raw = teleop_interface._get_raw_data()
@@ -824,18 +826,24 @@ def main() -> None:
                             right_hand_data = xr_raw.get(DeviceBase.TrackingTarget.HAND_RIGHT)
 
                             if left_hand_data is not None:
+                                left_thumb = left_hand_data["thumb_tip"][:3]
+                                left_index = left_hand_data["index_tip"][:3]
+                                left_finger_dist = np.linalg.norm(left_thumb - left_index)
                                 left_grip_raw = compute_grip_from_finger_distance(
-                                    left_hand_data["thumb_tip"][:3],
-                                    left_hand_data["index_tip"][:3],
+                                    left_thumb,
+                                    left_index,
                                     args_cli.pinch_close_dist,
                                     args_cli.pinch_open_dist,
                                 )
                                 left_grip = torch.tensor([[left_grip_raw]], dtype=torch.float32, device=device)
 
                             if right_hand_data is not None:
+                                right_thumb = right_hand_data["thumb_tip"][:3]
+                                right_index = right_hand_data["index_tip"][:3]
+                                right_finger_dist = np.linalg.norm(right_thumb - right_index)
                                 right_grip_raw = compute_grip_from_finger_distance(
-                                    right_hand_data["thumb_tip"][:3],
-                                    right_hand_data["index_tip"][:3],
+                                    right_thumb,
+                                    right_index,
                                     args_cli.pinch_close_dist,
                                     args_cli.pinch_open_dist,
                                 )
@@ -859,6 +867,18 @@ def main() -> None:
                     left_gripper_scalar = left_gripper_target.item() if isinstance(left_gripper_target, torch.Tensor) and left_gripper_target.numel() == 1 else float(left_gripper_target) if isinstance(left_gripper_target, (int, float)) else left_gripper_target[0].item()
                     right_gripper_scalar = right_gripper_target.item() if isinstance(right_gripper_target, torch.Tensor) and right_gripper_target.numel() == 1 else float(right_gripper_target) if isinstance(right_gripper_target, (int, float)) else right_gripper_target[0].item()
                     debug_logger.log_gripper(left_gripper_scalar, right_gripper_scalar, left_grip_scalar, right_grip_scalar)
+
+                    # Debug: Print gripper values every 30 frames (2Hz at 60Hz loop)
+                    if args_cli.debug_console and verbose_frame_count % 30 == 0:
+                        # Get current gripper position from robot
+                        robot = env.robot
+                        curr_left_grip = robot.data.joint_pos[:, left_gripper_idx[0]].item()
+                        curr_right_grip = robot.data.joint_pos[:, right_gripper_idx[0]].item()
+                        dist_str = ""
+                        if left_finger_dist is not None:
+                            dist_str = f" | L_dist={left_finger_dist*100:.1f}cm R_dist={right_finger_dist*100:.1f}cm"
+                        print(f"[GRIP] L: raw={left_grip_scalar:+.2f} -> target={left_gripper_scalar:.4f} | curr={curr_left_grip:.4f} | "
+                              f"R: raw={right_grip_scalar:+.2f} -> target={right_gripper_scalar:.4f} | curr={curr_right_grip:.4f}{dist_str}")
 
                     # Ensure proper shape for grippers
                     if isinstance(left_gripper_target, float):
