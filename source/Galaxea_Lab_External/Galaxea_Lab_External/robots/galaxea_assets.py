@@ -11,7 +11,7 @@ from isaaclab.assets import (
     AssetBaseCfg,
 )
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import ArticulationRootPropertiesCfg, RigidBodyPropertiesCfg
 
 
 ##
@@ -214,6 +214,8 @@ TABLE_CFG = RigidObjectCfg(
         # usd_path=f"{ISAACLAB_ASSETS_DATA_DIR}/Props/table/LowFullDesk.usd",
         usd_path=f"{GALAXEA_LAB_ASSETS_DIR}/Props/table/desk.usd",
         scale=(0.01, 0.01, 0.0135),
+        # This table USD has an articulation root authored; disable it for rigid-object spawning.
+        articulation_props=ArticulationRootPropertiesCfg(articulation_enabled=False),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,  # 禁用重力，确保桌子不会因重力移动
             kinematic_enabled=True,

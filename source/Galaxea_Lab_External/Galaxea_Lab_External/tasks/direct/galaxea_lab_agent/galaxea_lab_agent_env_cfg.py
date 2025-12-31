@@ -14,6 +14,11 @@ from isaaclab.utils import configclass
 from isaaclab.sensors import CameraCfg
 import math
 
+# OpenXR and teleoperation imports
+from isaaclab.devices.device_base import DeviceBase, DevicesCfg
+from isaaclab.devices.openxr import OpenXRDeviceCfg, XrCfg
+from isaaclab.devices.openxr.retargeters import Se3AbsRetargeterCfg, GripperRetargeterCfg
+
 # from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 # from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 # from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
@@ -138,3 +143,39 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
     initial_torso_joint3_pos = 0.5
 
     x_offset = 0.2
+
+    # XR configuration for CloudXR streaming
+    xr: XrCfg = XrCfg()
+
+    # Teleoperation devices configuration for OpenXR hand tracking
+    teleop_devices: DevicesCfg = DevicesCfg(
+        devices={
+            "handtracking": OpenXRDeviceCfg(
+                xr_cfg=None,  # Will use environment's xr config
+                retargeters=[
+                    # Left hand pose tracking
+                    Se3AbsRetargeterCfg(
+                        bound_hand=DeviceBase.TrackingTarget.HAND_LEFT,
+                        zero_out_xy_rotation=False,
+                        use_wrist_rotation=True,
+                        use_wrist_position=True,
+                    ),
+                    # Left gripper control
+                    GripperRetargeterCfg(
+                        bound_hand=DeviceBase.TrackingTarget.HAND_LEFT,
+                    ),
+                    # Right hand pose tracking
+                    Se3AbsRetargeterCfg(
+                        bound_hand=DeviceBase.TrackingTarget.HAND_RIGHT,
+                        zero_out_xy_rotation=False,
+                        use_wrist_rotation=True,
+                        use_wrist_position=True,
+                    ),
+                    # Right gripper control
+                    GripperRetargeterCfg(
+                        bound_hand=DeviceBase.TrackingTarget.HAND_RIGHT,
+                    ),
+                ],
+            ),
+        }
+    )

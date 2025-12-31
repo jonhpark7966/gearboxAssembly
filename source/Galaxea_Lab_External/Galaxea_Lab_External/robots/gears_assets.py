@@ -31,6 +31,9 @@ TABLE_CFG = RigidObjectCfg(
     prim_path="/World/envs/env_.*/Table",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{GALAXEA_LAB_ASSETS_DIR}/Props/table/OakTableLarge.usd",
+        # The table USD has an articulation root authored on it. Since we spawn it as a rigid object,
+        # explicitly disable articulation at the root to avoid IsaacLab throwing during init.
+        articulation_props=ArticulationRootPropertiesCfg(articulation_enabled=False),
         rigid_props=RigidBodyPropertiesCfg(
             disable_gravity=True,
             max_depenetration_velocity=1.0,
