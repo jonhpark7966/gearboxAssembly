@@ -505,7 +505,7 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
                 for attempt in range(max_attempts):
                     # Generate random position
                     x = torch.rand(1, device=self.device).item() * 0.2 + 0.3 + self.cfg.x_offset  # range [0.3, 0.6]
-                    y = torch.rand(1, device=self.device).item() * 0.8 - 0.4  # range [-0.4, 0.4]
+                    y = torch.rand(1, device=self.device).item() * 0.6 - 0.3  # range [-0.3, 0.3]
                     z = 0.92
 
                     # if obj_name == "ring_gear":
@@ -515,13 +515,13 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
                         x = 0.4 + self.cfg.x_offset 
                         y = 0.0
                     elif obj_name == "sun_planetary_gear_1":
-                        y = torch.rand(1, device=self.device).item() * 0.4
+                        y = torch.rand(1, device=self.device).item() * 0.3
                     elif obj_name == "sun_planetary_gear_2":
-                        y = torch.rand(1, device=self.device).item() * 0.4
+                        y = torch.rand(1, device=self.device).item() * 0.3
                     elif obj_name == "sun_planetary_gear_3":
-                        y = -torch.rand(1, device=self.device).item() * 0.4
+                        y = -torch.rand(1, device=self.device).item() * 0.3
                     elif obj_name == "sun_planetary_gear_4":
-                        y = -torch.rand(1, device=self.device).item() * 0.4
+                        y = -torch.rand(1, device=self.device).item() * 0.3
                     # elif obj_name == "planetary_reducer":
                     #     y = -torch.rand(1, device=self.device).item() * 0.4
 
@@ -611,13 +611,34 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         self.save_hdf5_file_name = './data/data_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.hdf5'
 
 
-        self.initial_root_state = self._randomize_object_positions([self.planetary_carrier, self.ring_gear, 
-                                        self.sun_planetary_gear_1, self.sun_planetary_gear_2,
-                                        self.sun_planetary_gear_3, self.sun_planetary_gear_4,
-                                        self.planetary_reducer], ['planetary_carrier', 'ring_gear', 
-                                        'sun_planetary_gear_1', 'sun_planetary_gear_2',
-                                        'sun_planetary_gear_3', 'sun_planetary_gear_4',
-                                        'planetary_reducer'])
+        if getattr(self.cfg, "randomize_objects", True):
+            self.initial_root_state = self._randomize_object_positions(
+                [
+                    self.planetary_carrier,
+                    self.ring_gear,
+                    self.sun_planetary_gear_1,
+                    self.sun_planetary_gear_2,
+                    self.sun_planetary_gear_3,
+                    self.sun_planetary_gear_4,
+                    self.planetary_reducer,
+                ],
+                [
+                    "planetary_carrier",
+                    "ring_gear",
+                    "sun_planetary_gear_1",
+                    "sun_planetary_gear_2",
+                    "sun_planetary_gear_3",
+                    "sun_planetary_gear_4",
+                    "planetary_reducer",
+                ],
+            )
+        else:
+            # Reset objects back to their authored default states.
+            self.initial_root_state = {}
+            for obj_name, obj in self.obj_dict.items():
+                root_state = obj.data.default_root_state.clone()
+                obj.write_root_state_to_sim(root_state)
+                self.initial_root_state[obj_name] = root_state.clone()
         
         for obj_name, obj in self.obj_dict.items():
             obj.update(self.sim.get_physics_dt())
@@ -657,6 +678,16 @@ class GalaxeaLabExternalEnv(DirectRLEnv):
         self.robot.write_joint_position_limit_to_sim(torch.tensor([self.cfg.initial_torso_joint2_pos, self.cfg.initial_torso_joint2_pos], device=self.device), self._torso_joint2_idx, env_ids)
         self.robot.write_joint_position_limit_to_sim(torch.tensor([self.cfg.initial_torso_joint3_pos, self.cfg.initial_torso_joint3_pos], device=self.device), self._torso_joint3_idx, env_ids)
 
+        # Let physics settle after teleporting rigid objects on reset.
+        settle_steps = int(getattr(self.cfg, "reset_settle_steps", 0) or 0)
+        if settle_steps > 0:
+            sim_dt = self.sim.get_physics_dt()
+            for _ in range(settle_steps):
+                self.scene.write_data_to_sim()
+                self.sim.step(render=False)
+                self.scene.update(dt=sim_dt)
+                for obj in self.obj_dict.values():
+                    obj.update(sim_dt)
 
         # self.head_camera.reset(env_ids)
 

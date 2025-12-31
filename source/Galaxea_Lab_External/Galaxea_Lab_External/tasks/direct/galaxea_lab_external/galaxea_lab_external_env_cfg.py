@@ -108,8 +108,12 @@ class GalaxeaLabExternalEnvCfg(DirectRLEnvCfg):
                                                                        ))
     # Physics
     table_friction_coefficient = 0.4
-    gears_friction_coefficient = 0.01
+    gears_friction_coefficient = 0.2
     gripper_friction_coefficient = 2.0
+
+    # Reset/randomization
+    randomize_objects: bool = True
+    reset_settle_steps: int = 10
 
     # Camera
     head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam")

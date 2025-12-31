@@ -39,7 +39,7 @@ GALAXEA_R1_CHALLENGE_CFG = ArticulationCfg(
                 solver_position_iteration_count=192,
                 solver_velocity_iteration_count=192,
             ),
-            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.05, rest_offset=0.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
             joint_pos={

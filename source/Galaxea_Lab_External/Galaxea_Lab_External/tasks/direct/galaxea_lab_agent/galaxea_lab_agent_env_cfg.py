@@ -113,8 +113,12 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                                                                        ))
     # Physics
     table_friction_coefficient = 0.4
-    gears_friction_coefficient = 0.01
+    gears_friction_coefficient = 0.2
     gripper_friction_coefficient = 2.0
+
+    # Reset/randomization
+    randomize_objects: bool = True
+    reset_settle_steps: int = 10
 
     # Camera
     head_camera_cfg: CameraCfg = GALAXEA_HEAD_CAMERA_CFG.replace(prim_path="/World/envs/env_.*/Robot/zed_link/head_cam/head_cam")
@@ -161,7 +165,7 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                         zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
                         use_wrist_rotation=False,   # Use finger average (more stable)
                         use_wrist_position=True,    # Use wrist position
-                        enable_visualization=False, # Disabled due to IsaacLab bug in _update_visualization
+                        enable_visualization=False, # Off by default (teleop script can visualize targets/markers)
                     ),
                     # [7:8] Left gripper control
                     GripperRetargeterCfg(
@@ -173,7 +177,7 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
                         zero_out_xy_rotation=True,  # Constrain to Z-axis rotation for stability
                         use_wrist_rotation=False,   # Use finger average (more stable)
                         use_wrist_position=True,    # Use wrist position
-                        enable_visualization=False, # Disabled due to IsaacLab bug in _update_visualization
+                        enable_visualization=False, # Off by default (teleop script can visualize targets/markers)
                     ),
                     # [15:16] Right gripper control
                     GripperRetargeterCfg(

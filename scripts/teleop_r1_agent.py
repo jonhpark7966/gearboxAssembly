@@ -87,6 +87,13 @@ parser.add_argument(
     help="Show hand markers",
 )
 parser.add_argument(
+    "--no_randomize_objects",
+    action="store_false",
+    dest="randomize_objects",
+    default=True,
+    help="Disable object randomization on reset (default: randomize)",
+)
+parser.add_argument(
     "--debug_log_dir",
     type=str,
     default="./logs/teleop_debug",
@@ -127,9 +134,12 @@ import gymnasium as gym
 import numpy as np
 
 from isaaclab.devices import Se3Keyboard, Se3KeyboardCfg
-from isaaclab.devices.openxr import remove_camera_configs
+from isaaclab.devices.device_base import DeviceBase
+from isaaclab.devices.openxr import OpenXRDevice, remove_camera_configs
 from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers.config import FRAME_MARKER_CFG, SPHERE_MARKER_CFG
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms, quat_mul, quat_inv, quat_apply
 # Import the task module to register the environment
@@ -139,8 +149,9 @@ from isaaclab_tasks.utils import parse_env_cfg
 # Import data recorder
 from teleop_data_recorder import TeleopDataRecorder
 
-# Note: Hand visualization is now handled by Se3AbsRetargeter with enable_visualization=True
-# This shows coordinate frame markers at the target end-effector positions
+# Visualization:
+# - --visualize_targets: frame markers for EE targets
+# - --hand_markers: spheres for wrist/thumb/index (OpenXR only)
 
 logger = logging.getLogger(__name__)
 
@@ -306,10 +317,6 @@ def compute_ik(
     """
     robot = env.unwrapped.robot
 
-    # Set IK command
-    ik_command = torch.cat([target_pos, target_quat], dim=-1)
-    controller.set_command(ik_command)
-
     # Get Jacobian
     if robot.is_fixed_base:
         ee_jacobi_idx = body_ids[0] - 1
@@ -331,6 +338,18 @@ def compute_ik(
         ee_pose_w[:, 0:3],
         ee_pose_w[:, 3:7],
     )
+
+    # Transform target to robot base frame (DiffIK expects commands in base frame)
+    target_pos_b, target_quat_b = subtract_frame_transforms(
+        root_pose_w[:, 0:3],
+        root_pose_w[:, 3:7],
+        target_pos,
+        target_quat,
+    )
+
+    # Set IK command
+    ik_command = torch.cat([target_pos_b, target_quat_b], dim=-1)
+    controller.set_command(ik_command)
 
     # Get current joint positions
     joint_pos = robot.data.joint_pos[:, arm_entity_cfg.joint_ids]
@@ -375,6 +394,10 @@ def main() -> None:
     # Parse environment configuration
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
     env_cfg.env_name = args_cli.task
+
+    # Optional: disable object randomization to debug stability / teleop mapping
+    if hasattr(env_cfg, "randomize_objects"):
+        env_cfg.randomize_objects = args_cli.randomize_objects
 
     # Disable timeout for teleoperation
     if hasattr(env_cfg, "terminations") and hasattr(env_cfg.terminations, "time_out"):
@@ -539,6 +562,37 @@ def main() -> None:
         print("[Teleop] XR mode: Pinch thumb and index finger together, then release to START")
         print(f"[Teleop] Debug logs: {debug_logger.log_file}")
 
+    # Optional visualization markers
+    left_target_marker = None
+    right_target_marker = None
+    left_hand_marker = None
+    right_hand_marker = None
+
+    if args_cli.visualize_targets:
+        left_cfg = FRAME_MARKER_CFG.copy()
+        left_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+        left_cfg.prim_path = "/Visuals/ee_goal_left"
+        left_target_marker = VisualizationMarkers(left_cfg)
+
+        right_cfg = FRAME_MARKER_CFG.copy()
+        right_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+        right_cfg.prim_path = "/Visuals/ee_goal_right"
+        right_target_marker = VisualizationMarkers(right_cfg)
+
+    if args_cli.hand_markers:
+        if isinstance(teleop_interface, OpenXRDevice):
+            left_cfg = SPHERE_MARKER_CFG.copy()
+            left_cfg.prim_path = "/Visuals/hand_markers_left"
+            left_cfg.markers["sphere"].radius = 0.015
+            left_hand_marker = VisualizationMarkers(left_cfg)
+
+            right_cfg = SPHERE_MARKER_CFG.copy()
+            right_cfg.prim_path = "/Visuals/hand_markers_right"
+            right_cfg.markers["sphere"].radius = 0.015
+            right_hand_marker = VisualizationMarkers(right_cfg)
+        else:
+            print("[Teleop] --hand_markers requires OpenXR handtracking; ignoring for this device.")
+
     # Main simulation loop
     while simulation_app.is_running():
         try:
@@ -658,8 +712,38 @@ def main() -> None:
                     # Log targets
                     debug_logger.log_targets(left_pos_target, left_quat_target, right_pos_target, right_quat_target)
 
-                    # Note: Hand markers are now shown by Se3AbsRetargeter's built-in visualization
-                    # when enable_visualization=True in the retargeter config
+                    # Visualize target end-effector frames (optional)
+                    if left_target_marker is not None:
+                        left_target_marker.visualize(translations=left_pos_target, orientations=left_quat_target)
+                    if right_target_marker is not None:
+                        right_target_marker.visualize(translations=right_pos_target, orientations=right_quat_target)
+
+                    # Visualize wrist/thumb/index markers (optional, requires OpenXR raw data)
+                    if left_hand_marker is not None or right_hand_marker is not None:
+                        xr_data = teleop_interface._get_raw_data() if isinstance(teleop_interface, OpenXRDevice) else None
+                        if xr_data is not None:
+                            # Teleop scripts assume num_envs=1; visualize env 0 only.
+                            left_off = left_pos_offset[0] if left_pos_offset.dim() == 2 else left_pos_offset
+                            right_off = right_pos_offset[0] if right_pos_offset.dim() == 2 else right_pos_offset
+
+                            def _vis_hand(marker, hand_dict, offset_vec):
+                                if marker is None or hand_dict is None:
+                                    return
+                                wrist = hand_dict.get("wrist")
+                                thumb = hand_dict.get("thumb_tip")
+                                index = hand_dict.get("index_tip")
+                                if wrist is None or thumb is None or index is None:
+                                    return
+                                pts = torch.tensor(
+                                    [wrist[:3], thumb[:3], index[:3]],
+                                    dtype=torch.float32,
+                                    device=device,
+                                )
+                                pts = pts + offset_vec.unsqueeze(0)
+                                marker.visualize(translations=pts)
+
+                            _vis_hand(left_hand_marker, xr_data.get(DeviceBase.TrackingTarget.HAND_LEFT), left_off)
+                            _vis_hand(right_hand_marker, xr_data.get(DeviceBase.TrackingTarget.HAND_RIGHT), right_off)
 
                     # Compute IK for both arms (now with corrected orientation)
                     left_joint_targets = compute_ik(
@@ -708,14 +792,17 @@ def main() -> None:
                         elif right_gripper_target.dim() == 1:
                             right_gripper_target = right_gripper_target.unsqueeze(-1)
 
-                    # Construct action tensor (14D):
-                    # [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
-                    actions = torch.cat([
-                        left_joint_targets,
-                        left_gripper_target,
-                        right_joint_targets,
-                        right_gripper_target,
-                    ], dim=-1)
+                    # Construct action tensor (14D) matching the environment's joint index order:
+                    # [left_arm(6), right_arm(6), left_gripper(1), right_gripper(1)]
+                    actions = torch.cat(
+                        [
+                            left_joint_targets,
+                            right_joint_targets,
+                            left_gripper_target,
+                            right_gripper_target,
+                        ],
+                        dim=-1,
+                    )
 
                     # Step environment
                     obs, reward, terminated, truncated, info = env.step(actions)

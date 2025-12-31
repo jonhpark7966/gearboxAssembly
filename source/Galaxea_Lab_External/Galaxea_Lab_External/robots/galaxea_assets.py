@@ -221,9 +221,6 @@ TABLE_CFG = RigidObjectCfg(
             kinematic_enabled=True,
             retain_accelerations=False,  # 防止物体在碰撞后受到加速度影响
         ),
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            articulation_enabled=False
-        ),
     ),
 )
 

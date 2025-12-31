@@ -153,7 +153,7 @@ class TeleopDataRecorder:
 
         Args:
             obs: Observation dictionary from environment.
-            actions: Action tensor (14D: 6 left arm + 1 left gripper + 6 right arm + 1 right gripper).
+            actions: Action tensor (14D: 6 left arm + 6 right arm + 1 left gripper + 1 right gripper).
             env_idx: Environment index for multi-env setups.
         """
         if not self.is_recording:
@@ -248,10 +248,10 @@ class TeleopDataRecorder:
         if actions_np.ndim == 2:
             actions_np = actions_np[env_idx]
 
-        # Action format: [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
+        # Action format: [left_arm(6), right_arm(6), left_gripper(1), right_gripper(1)]
         self.data["/actions/left_arm_action"].append(actions_np[0:6].astype(np.float32))
-        self.data["/actions/left_gripper"].append(actions_np[6:7].astype(np.float32))
-        self.data["/actions/right_arm_action"].append(actions_np[7:13].astype(np.float32))
+        self.data["/actions/right_arm_action"].append(actions_np[6:12].astype(np.float32))
+        self.data["/actions/left_gripper"].append(actions_np[12:13].astype(np.float32))
         self.data["/actions/right_gripper"].append(actions_np[13:14].astype(np.float32))
 
     def save_episode(self) -> str:
