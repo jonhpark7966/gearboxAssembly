@@ -93,15 +93,15 @@ parser.add_argument(
     help="Directory to save debug logs",
 )
 parser.add_argument(
-    "--verbose",
+    "--debug_console",
     action="store_true",
     help="Print verbose debug info to console every frame",
 )
 parser.add_argument(
-    "--verbose_frames",
+    "--debug_frames",
     type=int,
     default=200,
-    help="Number of frames to print verbose output (default: 200)",
+    help="Number of frames to print debug output (default: 200)",
 )
 
 # Add AppLauncher arguments
@@ -635,7 +635,7 @@ def main() -> None:
                     debug_logger.log_parsed(left_pos, left_quat, left_grip, right_pos, right_quat, right_grip)
 
                     # Verbose console logging (first N frames)
-                    if args_cli.verbose and verbose_frame_count < args_cli.verbose_frames:
+                    if args_cli.debug_console and verbose_frame_count < args_cli.debug_frames:
                         lp = left_pos[0].cpu().numpy()
                         lq = left_quat[0].cpu().numpy()
                         lg = left_grip[0].cpu().numpy()
@@ -646,8 +646,8 @@ def main() -> None:
                               f"L_grip={lg[0]:+.2f} R_pos=[{rp[0]:.3f},{rp[1]:.3f},{rp[2]:.3f}] "
                               f"R_grip={rg[0]:+.2f}")
                         verbose_frame_count += 1
-                        if verbose_frame_count == args_cli.verbose_frames:
-                            print(f"[Teleop] Verbose logging stopped after {args_cli.verbose_frames} frames")
+                        if verbose_frame_count == args_cli.debug_frames:
+                            print(f"[Teleop] Debug console logging stopped after {args_cli.debug_frames} frames")
 
                     # Update hand markers (raw XR positions - before reanchoring)
                     if hand_markers is not None:
