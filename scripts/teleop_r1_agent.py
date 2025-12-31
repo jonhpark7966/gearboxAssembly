@@ -18,7 +18,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable
+from datetime import datetime
 
 from isaaclab.app import AppLauncher
 
@@ -85,18 +87,22 @@ parser.add_argument(
     help="Show hand markers",
 )
 parser.add_argument(
-    "--no_randomize_objects",
-    action="store_true",
-    help="Disable object randomization on reset",
+    "--debug_log_dir",
+    type=str,
+    default="./logs/teleop_debug",
+    help="Directory to save debug logs",
 )
 
 # Add AppLauncher arguments
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+# Unified XR mode detection
+IS_XR_MODE = "handtracking" in args_cli.teleop_device.lower()
+
 # Configure AppLauncher with XR if using hand tracking
 app_launcher_args = vars(args_cli)
-if "handtracking" in args_cli.teleop_device.lower():
+if IS_XR_MODE:
     app_launcher_args["xr"] = True
 
 # Launch application
@@ -114,7 +120,7 @@ from isaaclab.devices.openxr import remove_camera_configs
 from isaaclab.devices.teleop_device_factory import create_teleop_device
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.math import subtract_frame_transforms, quat_mul, quat_inv, quat_apply
 
 # Import the task module to register the environment
 import Galaxea_Lab_External.tasks  # noqa: F401
@@ -124,6 +130,104 @@ from isaaclab_tasks.utils import parse_env_cfg
 from teleop_data_recorder import TeleopDataRecorder
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Debug Logger Setup
+# ============================================================================
+class TeleopDebugLogger:
+    """File-based debug logger for teleoperation data."""
+
+    def __init__(self, log_dir: str):
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_file = os.path.join(log_dir, f"teleop_debug_{timestamp}.log")
+        self.frame_count = 0
+        self._file = open(self.log_file, "w")
+        self._write_header()
+        print(f"[Debug] Logging to: {self.log_file}")
+
+    def _write_header(self):
+        self._file.write("# Teleop Debug Log\n")
+        self._file.write(f"# Started: {datetime.now().isoformat()}\n")
+        self._file.write("# Format: frame, left_pos(3), left_quat(4), left_grip, right_pos(3), right_quat(4), right_grip\n")
+        self._file.write("# Grip values: GripperRetargeter outputs -1(close) / +1(open)\n")
+        self._file.write("#" + "=" * 100 + "\n")
+        self._file.flush()
+
+    def log_raw_action(self, raw_action):
+        """Log raw action from teleop device."""
+        if raw_action is None:
+            return
+        arr = raw_action.cpu().numpy() if hasattr(raw_action, "cpu") else np.array(raw_action)
+        self._file.write(f"[{self.frame_count}] RAW: shape={arr.shape}, data={arr.flatten()[:20]}...\n")
+
+    def log_parsed(self, left_pos, left_quat, left_grip, right_pos, right_quat, right_grip):
+        """Log parsed teleop values."""
+        def to_list(t):
+            if hasattr(t, "cpu"):
+                return t.cpu().numpy().flatten().tolist()
+            return list(t)
+
+        self._file.write(
+            f"[{self.frame_count}] PARSED: "
+            f"L_pos={to_list(left_pos)[:3]}, L_quat={to_list(left_quat)[:4]}, L_grip={to_list(left_grip)}, "
+            f"R_pos={to_list(right_pos)[:3]}, R_quat={to_list(right_quat)[:4]}, R_grip={to_list(right_grip)}\n"
+        )
+
+    def log_targets(self, left_pos_target, left_quat_target, right_pos_target, right_quat_target):
+        """Log target positions after reanchoring."""
+        def to_list(t):
+            if hasattr(t, "cpu"):
+                return t.cpu().numpy().flatten().tolist()
+            return list(t)
+
+        self._file.write(
+            f"[{self.frame_count}] TARGETS: "
+            f"L_pos={to_list(left_pos_target)[:3]}, L_quat={to_list(left_quat_target)[:4]}, "
+            f"R_pos={to_list(right_pos_target)[:3]}, R_quat={to_list(right_quat_target)[:4]}\n"
+        )
+
+    def log_gripper(self, left_gripper_joint, right_gripper_joint, left_grip_raw, right_grip_raw):
+        """Log gripper mapping."""
+        self._file.write(
+            f"[{self.frame_count}] GRIPPER: "
+            f"L_raw={left_grip_raw:.3f} -> L_joint={left_gripper_joint:.4f}, "
+            f"R_raw={right_grip_raw:.3f} -> R_joint={right_gripper_joint:.4f}\n"
+        )
+
+    def log_reanchor(self, left_pos_offset, left_quat_offset, right_pos_offset, right_quat_offset):
+        """Log reanchoring offsets."""
+        def to_list(t):
+            if hasattr(t, "cpu"):
+                return t.cpu().numpy().flatten().tolist()
+            return list(t)
+
+        self._file.write(
+            f"[{self.frame_count}] REANCHOR: "
+            f"L_pos_off={to_list(left_pos_offset)[:3]}, L_quat_off={to_list(left_quat_offset)[:4]}, "
+            f"R_pos_off={to_list(right_pos_offset)[:3]}, R_quat_off={to_list(right_quat_offset)[:4]}\n"
+        )
+        self._file.flush()
+
+    def log_event(self, event: str):
+        """Log an event."""
+        self._file.write(f"[{self.frame_count}] EVENT: {event}\n")
+        self._file.flush()
+
+    def next_frame(self):
+        """Increment frame counter."""
+        self.frame_count += 1
+        # Flush every 100 frames
+        if self.frame_count % 100 == 0:
+            self._file.flush()
+
+    def close(self):
+        """Close the log file."""
+        self._file.write(f"# Ended: {datetime.now().isoformat()}\n")
+        self._file.write(f"# Total frames: {self.frame_count}\n")
+        self._file.close()
+        print(f"[Debug] Log saved: {self.log_file}")
 
 
 def setup_ik_controller(env, arm_name: str, device: str):
@@ -225,17 +329,31 @@ def compute_ik(
 
 
 def map_grip_to_joint(grip: float, open_pos: float, close_pos: float) -> float:
-    """Map grip value (0-1) to gripper joint position.
+    """Map grip value from GripperRetargeter (-1/+1) to gripper joint position.
+
+    GripperRetargeter output:
+        - +1.0 = open (fingers apart)
+        - -1.0 = close (fingers together / pinch)
+
+    Gripper joint range (Galaxea R1):
+        - 0.04 = open
+        - 0.0 = close
 
     Args:
-        grip: Grip value from 0 (open) to 1 (closed).
-        open_pos: Gripper open joint position.
-        close_pos: Gripper closed joint position.
+        grip: Grip value from GripperRetargeter: -1 (close) to +1 (open).
+        open_pos: Gripper open joint position (default 0.04).
+        close_pos: Gripper closed joint position (default 0.0).
 
     Returns:
         Gripper joint position.
     """
-    return open_pos + grip * (close_pos - open_pos)
+    # Convert from [-1, +1] to [0, 1] where 0=close, 1=open
+    # grip=-1 -> normalized=0 (close)
+    # grip=+1 -> normalized=1 (open)
+    normalized = (grip + 1.0) / 2.0
+
+    # Map to joint position: normalized=0 -> close_pos, normalized=1 -> open_pos
+    return close_pos + normalized * (open_pos - close_pos)
 
 
 def main() -> None:
@@ -250,7 +368,7 @@ def main() -> None:
         env_cfg.terminations.time_out = None
 
     # Configure for XR - don't remove camera configs since we need them for recording
-    if args_cli.xr:
+    if IS_XR_MODE:
         env_cfg.sim.render.antialiasing_mode = "DLSS"
 
     # Create environment
@@ -263,6 +381,10 @@ def main() -> None:
 
     device = env.device
 
+    # Initialize debug logger
+    debug_logger = TeleopDebugLogger(args_cli.debug_log_dir)
+    debug_logger.log_event(f"Environment created: {args_cli.task}, device={device}, XR_MODE={IS_XR_MODE}")
+
     # Setup IK controllers for both arms
     left_ik, left_arm_cfg, left_body_ids, left_joint_ids = setup_ik_controller(env, "left", device)
     right_ik, right_arm_cfg, right_body_ids, right_joint_ids = setup_ik_controller(env, "right", device)
@@ -273,13 +395,16 @@ def main() -> None:
     right_gripper_idx, _ = robot.find_joints("right_gripper_axis1")
 
     # Teleoperation state
-    teleoperation_active = False if args_cli.xr else True
+    teleoperation_active = False if IS_XR_MODE else True
     should_reset = False
     is_recording = False
 
-    # Reanchoring offsets
+    # Reanchoring offsets (position + orientation)
     left_pos_offset = torch.zeros(3, device=device)
     right_pos_offset = torch.zeros(3, device=device)
+    # Quaternion offsets (wxyz format, identity = [1, 0, 0, 0])
+    left_quat_offset = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+    right_quat_offset = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
     need_reanchor = True
 
     # Data recorder
@@ -297,6 +422,7 @@ def main() -> None:
         if recorder and args_cli.record:
             recorder.start_recording()
             is_recording = True
+        debug_logger.log_event("START gesture detected - teleop activated")
         print("[Teleop] Activated - START gesture detected")
 
     def stop_teleoperation() -> None:
@@ -305,12 +431,14 @@ def main() -> None:
         if recorder and is_recording:
             recorder.stop_recording(save=True)
             is_recording = False
+        debug_logger.log_event("STOP gesture detected - teleop deactivated")
         print("[Teleop] Deactivated - STOP gesture detected")
 
     def reset_environment() -> None:
         nonlocal should_reset, need_reanchor
         should_reset = True
         need_reanchor = True
+        debug_logger.log_event("RESET triggered")
         print("[Teleop] Reset triggered")
 
     # Teleoperation callbacks
@@ -368,8 +496,9 @@ def main() -> None:
     teleop_interface.reset()
 
     print("[Teleop] Environment ready. Use START gesture to begin teleoperation.")
-    if args_cli.xr:
+    if IS_XR_MODE:
         print("[Teleop] XR mode: Pinch thumb and index finger together, then release to START")
+        print(f"[Teleop] Debug logs: {debug_logger.log_file}")
 
     # Main simulation loop
     while simulation_app.is_running():
@@ -381,6 +510,9 @@ def main() -> None:
                 raw_action = teleop_interface.advance()
 
                 if teleoperation_active and raw_action is not None:
+                    # Log raw action for debugging
+                    debug_logger.log_raw_action(raw_action)
+
                     # Parse the teleop output
                     # The Se3AbsRetargeter outputs: [pos(3), quat(4)]
                     # The GripperRetargeter outputs: [grip(1)]
@@ -396,6 +528,7 @@ def main() -> None:
                         right_grip = raw_action[..., 15:16]
                     else:
                         # Fallback: use current robot pose
+                        debug_logger.log_event(f"Fallback mode: raw_action.shape={raw_action.shape}")
                         robot = env.robot
                         left_ee_pose = robot.data.body_state_w[:, left_body_ids[0], 0:7]
                         right_ee_pose = robot.data.body_state_w[:, right_body_ids[0], 0:7]
@@ -403,8 +536,9 @@ def main() -> None:
                         left_quat = left_ee_pose[:, 3:7]
                         right_pos = right_ee_pose[:, 0:3]
                         right_quat = right_ee_pose[:, 3:7]
-                        left_grip = torch.zeros(env.num_envs, 1, device=device)
-                        right_grip = torch.zeros(env.num_envs, 1, device=device)
+                        # Default grip = +1 (open) for GripperRetargeter convention
+                        left_grip = torch.ones(env.num_envs, 1, device=device)
+                        right_grip = torch.ones(env.num_envs, 1, device=device)
 
                     # Ensure batch dimension
                     if left_pos.dim() == 1:
@@ -415,32 +549,57 @@ def main() -> None:
                         right_quat = right_quat.unsqueeze(0)
                         right_grip = right_grip.unsqueeze(0)
 
-                    # Reanchor: calculate offset to match current robot pose
+                    # Log parsed values
+                    debug_logger.log_parsed(left_pos, left_quat, left_grip, right_pos, right_quat, right_grip)
+
+                    # Reanchor: calculate position and orientation offset to match current robot pose
                     if need_reanchor:
                         robot = env.robot
                         left_ee_pose = robot.data.body_state_w[:, left_body_ids[0], 0:7]
                         right_ee_pose = robot.data.body_state_w[:, right_body_ids[0], 0:7]
+
+                        # Position offsets
                         left_pos_offset = left_ee_pose[:, 0:3] - left_pos
                         right_pos_offset = right_ee_pose[:, 0:3] - right_pos
+
+                        # Orientation offsets: quat_offset = ee_quat * inv(xr_quat)
+                        # This allows us to apply: target_quat = quat_offset * xr_quat
+                        left_quat_offset = quat_mul(left_ee_pose[:, 3:7], quat_inv(left_quat))
+                        right_quat_offset = quat_mul(right_ee_pose[:, 3:7], quat_inv(right_quat))
+
                         need_reanchor = False
-                        print(f"[Teleop] Reanchored - Left offset: {left_pos_offset[0].cpu().numpy()}")
-                        print(f"[Teleop] Reanchored - Right offset: {right_pos_offset[0].cpu().numpy()}")
+
+                        # Log reanchoring
+                        debug_logger.log_reanchor(
+                            left_pos_offset, left_quat_offset,
+                            right_pos_offset, right_quat_offset
+                        )
+                        print(f"[Teleop] Reanchored - Left pos offset: {left_pos_offset[0].cpu().numpy()}")
+                        print(f"[Teleop] Reanchored - Right pos offset: {right_pos_offset[0].cpu().numpy()}")
 
                     # Apply position offsets
                     left_pos_target = left_pos + left_pos_offset
                     right_pos_target = right_pos + right_pos_offset
 
-                    # Compute IK for both arms
+                    # Apply orientation offsets: target_quat = offset_quat * xr_quat
+                    left_quat_target = quat_mul(left_quat_offset.unsqueeze(0) if left_quat_offset.dim() == 1 else left_quat_offset, left_quat)
+                    right_quat_target = quat_mul(right_quat_offset.unsqueeze(0) if right_quat_offset.dim() == 1 else right_quat_offset, right_quat)
+
+                    # Log targets
+                    debug_logger.log_targets(left_pos_target, left_quat_target, right_pos_target, right_quat_target)
+
+                    # Compute IK for both arms (now with corrected orientation)
                     left_joint_targets = compute_ik(
                         env, left_ik, left_arm_cfg, left_body_ids,
-                        left_pos_target, left_quat
+                        left_pos_target, left_quat_target
                     )
                     right_joint_targets = compute_ik(
                         env, right_ik, right_arm_cfg, right_body_ids,
-                        right_pos_target, right_quat
+                        right_pos_target, right_quat_target
                     )
 
                     # Map grip to gripper joint position
+                    # GripperRetargeter: -1 (close) / +1 (open)
                     left_gripper_target = map_grip_to_joint(
                         left_grip.squeeze(-1),
                         args_cli.gripper_open,
@@ -452,20 +611,29 @@ def main() -> None:
                         args_cli.gripper_close
                     )
 
+                    # Log gripper mapping
+                    left_grip_scalar = left_grip.squeeze().item() if left_grip.numel() == 1 else left_grip[0, 0].item()
+                    right_grip_scalar = right_grip.squeeze().item() if right_grip.numel() == 1 else right_grip[0, 0].item()
+                    left_gripper_scalar = left_gripper_target.item() if isinstance(left_gripper_target, torch.Tensor) and left_gripper_target.numel() == 1 else float(left_gripper_target) if isinstance(left_gripper_target, (int, float)) else left_gripper_target[0].item()
+                    right_gripper_scalar = right_gripper_target.item() if isinstance(right_gripper_target, torch.Tensor) and right_gripper_target.numel() == 1 else float(right_gripper_target) if isinstance(right_gripper_target, (int, float)) else right_gripper_target[0].item()
+                    debug_logger.log_gripper(left_gripper_scalar, right_gripper_scalar, left_grip_scalar, right_grip_scalar)
+
                     # Ensure proper shape for grippers
                     if isinstance(left_gripper_target, float):
                         left_gripper_target = torch.tensor([[left_gripper_target]], device=device)
-                    elif left_gripper_target.dim() == 0:
-                        left_gripper_target = left_gripper_target.unsqueeze(0).unsqueeze(0)
-                    elif left_gripper_target.dim() == 1:
-                        left_gripper_target = left_gripper_target.unsqueeze(-1)
+                    elif isinstance(left_gripper_target, torch.Tensor):
+                        if left_gripper_target.dim() == 0:
+                            left_gripper_target = left_gripper_target.unsqueeze(0).unsqueeze(0)
+                        elif left_gripper_target.dim() == 1:
+                            left_gripper_target = left_gripper_target.unsqueeze(-1)
 
                     if isinstance(right_gripper_target, float):
                         right_gripper_target = torch.tensor([[right_gripper_target]], device=device)
-                    elif right_gripper_target.dim() == 0:
-                        right_gripper_target = right_gripper_target.unsqueeze(0).unsqueeze(0)
-                    elif right_gripper_target.dim() == 1:
-                        right_gripper_target = right_gripper_target.unsqueeze(-1)
+                    elif isinstance(right_gripper_target, torch.Tensor):
+                        if right_gripper_target.dim() == 0:
+                            right_gripper_target = right_gripper_target.unsqueeze(0).unsqueeze(0)
+                        elif right_gripper_target.dim() == 1:
+                            right_gripper_target = right_gripper_target.unsqueeze(-1)
 
                     # Construct action tensor (14D):
                     # [left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]
@@ -479,10 +647,19 @@ def main() -> None:
                     # Step environment
                     obs, reward, terminated, truncated, info = env.step(actions)
 
+                    # Handle terminated or truncated episodes
+                    if terminated.any() or truncated.any():
+                        debug_logger.log_event(f"Episode ended: terminated={terminated.any().item()}, truncated={truncated.any().item()}")
+                        # Auto-reset is handled by env, but we need to reanchor
+                        need_reanchor = True
+
                     # Record data if enabled
                     if recorder and is_recording:
                         env_obs = env.obs if hasattr(env, "obs") else obs.get("policy", obs)
                         recorder.record_frame(env_obs, actions, env_idx=0)
+
+                    # Increment debug frame counter
+                    debug_logger.next_frame()
 
                 else:
                     # Just render when not active
@@ -494,10 +671,12 @@ def main() -> None:
                     teleop_interface.reset()
                     should_reset = False
                     need_reanchor = True
+                    debug_logger.log_event("Environment reset complete")
                     print("[Teleop] Environment reset complete")
 
         except Exception as e:
             logger.error(f"Error during simulation: {e}")
+            debug_logger.log_event(f"ERROR: {e}")
             import traceback
             traceback.print_exc()
             break
@@ -505,6 +684,7 @@ def main() -> None:
     # Cleanup
     if recorder and is_recording:
         recorder.stop_recording(save=True)
+    debug_logger.close()
     env.close()
     print("[Teleop] Environment closed")
 
