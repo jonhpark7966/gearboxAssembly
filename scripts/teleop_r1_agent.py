@@ -229,12 +229,16 @@ class TeleopDebugLogger:
             f"R_pos={to_list(right_pos_target)[:3]}, R_quat={to_list(right_quat_target)[:4]}\n"
         )
 
-    def log_gripper(self, left_gripper_joint, right_gripper_joint, left_grip_raw, right_grip_raw):
-        """Log gripper mapping."""
+    def log_gripper(self, left_gripper_joint, right_gripper_joint, left_grip_raw, right_grip_raw,
+                    left_gripper_curr=None, right_gripper_curr=None):
+        """Log gripper mapping with optional current position."""
+        curr_str = ""
+        if left_gripper_curr is not None and right_gripper_curr is not None:
+            curr_str = f", L_curr={left_gripper_curr:.4f}, R_curr={right_gripper_curr:.4f}"
         self._file.write(
             f"[{self.frame_count}] GRIPPER: "
             f"L_raw={left_grip_raw:.3f} -> L_joint={left_gripper_joint:.4f}, "
-            f"R_raw={right_grip_raw:.3f} -> R_joint={right_gripper_joint:.4f}\n"
+            f"R_raw={right_grip_raw:.3f} -> R_joint={right_gripper_joint:.4f}{curr_str}\n"
         )
 
     def log_reanchor(self, left_pos_offset, left_quat_offset, right_pos_offset, right_quat_offset):
@@ -861,19 +865,25 @@ def main() -> None:
                         args_cli.gripper_close
                     )
 
-                    # Log gripper mapping
+                    # Log gripper mapping (with current position for debugging)
                     left_grip_scalar = left_grip.squeeze().item() if left_grip.numel() == 1 else left_grip[0, 0].item()
                     right_grip_scalar = right_grip.squeeze().item() if right_grip.numel() == 1 else right_grip[0, 0].item()
                     left_gripper_scalar = left_gripper_target.item() if isinstance(left_gripper_target, torch.Tensor) and left_gripper_target.numel() == 1 else float(left_gripper_target) if isinstance(left_gripper_target, (int, float)) else left_gripper_target[0].item()
                     right_gripper_scalar = right_gripper_target.item() if isinstance(right_gripper_target, torch.Tensor) and right_gripper_target.numel() == 1 else float(right_gripper_target) if isinstance(right_gripper_target, (int, float)) else right_gripper_target[0].item()
-                    debug_logger.log_gripper(left_gripper_scalar, right_gripper_scalar, left_grip_scalar, right_grip_scalar)
+
+                    # Get current gripper position from robot (for logging and debugging)
+                    curr_left_grip = robot.data.joint_pos[:, left_gripper_idx[0]].item()
+                    curr_right_grip = robot.data.joint_pos[:, right_gripper_idx[0]].item()
+
+                    # Log with target and current values
+                    debug_logger.log_gripper(
+                        left_gripper_scalar, right_gripper_scalar,
+                        left_grip_scalar, right_grip_scalar,
+                        curr_left_grip, curr_right_grip
+                    )
 
                     # Debug: Print gripper values every 30 frames (2Hz at 60Hz loop)
                     if args_cli.debug_console and verbose_frame_count % 30 == 0:
-                        # Get current gripper position from robot
-                        robot = env.robot
-                        curr_left_grip = robot.data.joint_pos[:, left_gripper_idx[0]].item()
-                        curr_right_grip = robot.data.joint_pos[:, right_gripper_idx[0]].item()
                         dist_str = ""
                         if left_finger_dist is not None:
                             dist_str = f" | L_dist={left_finger_dist*100:.1f}cm R_dist={right_finger_dist*100:.1f}cm"

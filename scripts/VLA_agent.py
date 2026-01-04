@@ -1,128 +1,227 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
+# Copyright (c) 2022-2025
 # SPDX-License-Identifier: BSD-3-Clause
+"""
+VLA (Vision-Language-Action) Agent for Galaxea R1 Robot
 
-"""Script to an environment with random action agent."""
+ACT (Action Chunking Transformer) 모델을 사용하여 이미지와 현재 관절 상태로부터
+action을 예측하는 에이전트입니다.
 
-"""Launch Isaac Sim Simulator first."""
+Usage:
+    ./isaaclab.sh -p scripts/VLA_agent.py \
+        --task Template-Galaxea-Lab-Agent-Direct-v0 \
+        --checkpoint /path/to/policy_best.ckpt \
+        --num_envs 1
+
+Model Input:
+    - qpos: 14D joint positions [left_arm(6), right_arm(6), left_grip(1), right_grip(1)]
+    - images: (3, C, H, W) - head, left_hand, right_hand cameras
+
+Model Output:
+    - action: 14D joint position targets
+
+Data Flow:
+    1. env.step() → observation (RGB + joint positions)
+    2. observation → ACT policy.predict()
+    3. ACT output → env.step(action)
+    4. 환경 내부: action → _apply_action() → set_joint_position_target()
+"""
+
+from __future__ import annotations
 
 import argparse
 
 from isaaclab.app import AppLauncher
 
-# add argparse arguments
-parser = argparse.ArgumentParser(description="Random agent for Isaac Lab environments.")
+# ============================================================================
+# CLI Arguments
+# ============================================================================
+parser = argparse.ArgumentParser(description="VLA agent for Galaxea R1")
 parser.add_argument(
-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+    "--disable_fabric", action="store_true", default=False,
+    help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to the VLA model checkpoint.")
-# append AppLauncher cli args
+parser.add_argument(
+    "--num_envs", type=int, default=1,
+    help="Number of environments to simulate."
+)
+parser.add_argument(
+    "--task", type=str, default="Template-Galaxea-Lab-Agent-Direct-v0",
+    help="Name of the task."
+)
+parser.add_argument(
+    "--checkpoint", type=str, default=None, required=True,
+    help="Path to the VLA model checkpoint."
+)
+parser.add_argument(
+    "--temporal_agg", action="store_true", default=True,
+    help="Use temporal aggregation for smoother actions"
+)
+parser.add_argument(
+    "--debug", action="store_true",
+    help="Enable debug output"
+)
 AppLauncher.add_app_launcher_args(parser)
-# parse the arguments
 args_cli = parser.parse_args()
 
-# launch omniverse app
+print(f"[VLAAgent] args_cli: {args_cli}")
+
+# ============================================================================
+# Launch Application
+# ============================================================================
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
-
+# ============================================================================
+# Post-Launch Imports
+# ============================================================================
 import gymnasium as gym
 import torch
 
 import isaaclab_tasks
 from isaaclab_tasks.utils import parse_env_cfg
+import Galaxea_Lab_External.tasks  # Register environment
 
-import Galaxea_Lab_External.tasks
+from Galaxea_Lab_External.VLA.ACT.policy_wrapper import (
+    ACTPolicyWrapper,
+    DiffusionPolicyWrapper,
+    BCPolicyWrapper,
+    DataReplayPolicyWrapper
+)
 
-from Galaxea_Lab_External.VLA.ACT.policy_wrapper import ACTPolicyWrapper, DiffusionPolicyWrapper, BCPolicyWrapper, DataReplayPolicyWrapper
+# Import base agent utilities
+from base_agent import (
+    TOTAL_ACTION_DIM,
+    LEFT_GRIPPER_IDX,
+    RIGHT_GRIPPER_IDX,
+    parse_observation,
+    print_action_debug,
+    print_observation_debug,
+    print_joint_index_debug,
+)
 
 
+# ============================================================================
+# Main Function
+# ============================================================================
 def main():
-    """Random actions agent with Isaac Lab environment."""
-    # create environment configuration
+    """VLA (ACT) Policy Agent 메인 루프
+
+    Data Flow:
+        1. 환경에서 observation 수집 (RGB images + joint positions)
+        2. Observation을 policy 입력 형식으로 변환
+           - qpos: (1, 14) float32
+           - images: (1, 3, C, H, W) float32 normalized
+        3. policy.predict(qpos, images) → action (1, 14)
+        4. env.step(action) 호출
+        5. 환경 내부: action → _apply_action() → set_joint_position_target()
+    """
+    # ========================================
+    # Step 1: Environment Configuration
+    # ========================================
     env_cfg = parse_env_cfg(
-        args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
+        args_cli.task,
+        device=args_cli.device,
+        num_envs=args_cli.num_envs,
+        use_fabric=not args_cli.disable_fabric
     )
 
-    # Load ACT policy
-    # checkpoint_path = '/scratch/SM/AAAI_challenge/gearboxAssembly/source/Galaxea_Lab_External/Galaxea_Lab_External/VLA/ACT/act/ckpt/policy_best.ckpt'
-    if args_cli.checkpoint is None:
-        print("No checkpoint path provided")
-        exit()
-    else:
-        checkpoint_path = args_cli.checkpoint
-    temporal_agg = True
-    policy = ACTPolicyWrapper(checkpoint_path, temporal_agg=temporal_agg)
+    # ========================================
+    # Step 2: Load ACT Policy
+    # ========================================
+    print(f"[VLAAgent] Loading checkpoint: {args_cli.checkpoint}")
+    policy = ACTPolicyWrapper(
+        args_cli.checkpoint,
+        temporal_agg=args_cli.temporal_agg
+    )
+    print("[VLAAgent] Policy loaded successfully")
 
-    # Test policy
-    # qpos = torch.rand(1, 14, device=args_cli.device)
-    # images = torch.rand(1, 3, 3, 240, 320, device=args_cli.device)
-    # action = policy.predict(qpos, images)
-    # print(f"action: {action}")
-    # exit()
-
-    # create environment
+    # ========================================
+    # Step 3: Create Environment
+    # ========================================
     env = gym.make(args_cli.task, cfg=env_cfg)
+    env_unwrapped = env.unwrapped
 
-    # sample_every_n_steps = max(int(sample_period / env.step_dt), 1)
-    print("env type: ", type(env))
+    print(f"[VLAAgent] Environment type: {type(env)}")
+    print(f"[VLAAgent] Observation space: {env.observation_space}")
+    print(f"[VLAAgent] Action space: {env.action_space}")
 
-    # print info (this is vectorized environment)
-    print(f"[INFO]: Gym observation space: {env.observation_space}")
-    print(f"[INFO]: Gym action space: {env.action_space}")
-    # reset environment
-    env.reset()
-    # simulate environment
+    # Debug: Joint index 확인
+    if args_cli.debug:
+        print_joint_index_debug(env_unwrapped)
+
+    # ========================================
+    # Step 4: Reset Environment
+    # ========================================
+    obs, _ = env.reset()
+    print("[VLAAgent] Environment reset complete")
+
+    # ========================================
+    # Step 5: Main Simulation Loop
+    # ========================================
+    step_count = 0
+
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
-            # sample actions from -1 to 1
-            actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
-            # apply actions
-            obs, reward, terminated, truncated, info = env.step(actions)
-            # print(f"obs: {obs}")
-            left_arm_joint_pos = obs['policy']['left_arm_joint_pos']
-            right_arm_joint_pos = obs['policy']['right_arm_joint_pos']
-            left_gripper_joint_pos = obs['policy']['left_gripper_joint_pos']
-            right_gripper_joint_pos = obs['policy']['right_gripper_joint_pos']
-            qpos = torch.cat([left_arm_joint_pos, right_arm_joint_pos, left_gripper_joint_pos.unsqueeze(0), right_gripper_joint_pos.unsqueeze(0)], dim=-1)
+            # ----------------------------------------
+            # Step 5a: Parse Observation
+            # ----------------------------------------
+            obs_parsed = parse_observation(obs)
 
-            head_rgb = obs['policy']['head_rgb'].unsqueeze(0).permute(0, 1, 4, 2, 3)
-            left_hand_rgb = obs['policy']['left_hand_rgb'].unsqueeze(0).permute(0, 1, 4, 2, 3)
-            right_hand_rgb = obs['policy']['right_hand_rgb'].unsqueeze(0).permute(0, 1, 4, 2, 3)
-            # print(f"left_hand_rgb shape: {left_hand_rgb.shape}")
-            # print(f"right_hand_rgb shape: {right_hand_rgb.shape}")
-            # print(f"head_rgb shape: {head_rgb.shape}")
+            # ----------------------------------------
+            # Step 5b: Prepare Policy Inputs
+            # ----------------------------------------
+            # qpos: (num_envs, 14) - current joint positions
+            qpos = obs_parsed.get_qpos()
 
-            images = torch.cat([head_rgb, left_hand_rgb, right_hand_rgb], dim=1)
-            # Change dtype of images to float32
-            images = images.to(torch.float32)
+            # images: (num_envs, 3, C, H, W) - 3 camera views
+            # Note: Policy expects (B, N_cams, C, H, W) float32
+            images = obs_parsed.get_images_for_vla()
 
-            # Print shape of qpos and images
-            print(f"qpos shape: {qpos.shape}")
-            print(f"images shape: {images.shape}")
-            # exit()
-            
+            if args_cli.debug and step_count < 3:
+                print(f"\n[VLAAgent] Step {step_count}")
+                print(f"  qpos shape: {qpos.shape}")
+                print(f"  images shape: {images.shape}")
+                print(f"  qpos values: {qpos[0].cpu().numpy()}")
+
+            # ----------------------------------------
+            # Step 5c: Policy Inference
+            # ----------------------------------------
+            # ACT policy predicts 14D action
             action = policy.predict(qpos, images)
-            print(f"action: {action}")
-            # exit()
 
-            print(f"Terminated: {terminated}")
-            print(f"Truncated: {truncated}")
-            env.step(actions)
-            if terminated or truncated:
-                env.reset()
+            if args_cli.debug and step_count < 3:
+                print_action_debug(action, prefix="  Predicted ")
 
-    # close the simulator
+            # ----------------------------------------
+            # Step 5d: Apply Action to Environment
+            # ----------------------------------------
+            # 이 호출이 핵심!
+            # env.step() → env._pre_physics_step() → env._apply_action()
+            # → robot.set_joint_position_target(action, _joint_idx)
+            obs, reward, terminated, truncated, info = env.step(action)
+
+            # ----------------------------------------
+            # Step 5e: Handle Episode End
+            # ----------------------------------------
+            if terminated.any() or truncated.any():
+                print(f"[VLAAgent] Episode ended at step {step_count}")
+                obs, _ = env.reset()
+                step_count = 0
+                continue
+
+            step_count += 1
+
+            # Periodic status
+            if step_count % 100 == 0:
+                print(f"[VLAAgent] Step {step_count}, Reward: {reward}")
+
+    # ========================================
+    # Step 6: Cleanup
+    # ========================================
     env.close()
+    print("[VLAAgent] Environment closed")
 
 
 if __name__ == "__main__":
-    # run the main function
     main()
-    # close sim app
     simulation_app.close()

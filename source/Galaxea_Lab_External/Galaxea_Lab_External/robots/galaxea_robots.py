@@ -50,7 +50,7 @@ GALAXEA_R1_CHALLENGE_CFG = ArticulationCfg(
             "left_arm_joint5": 38.7 / 180.0 * math.pi,
             "left_arm_joint6": 20.1 / 180.0 * math.pi,
             "left_gripper_axis1": 0.04,
-            # "left_gripper_axis2": 0.04,
+            "left_gripper_axis2": 0.04,  # Both axes needed for parallel-jaw gripper
             "right_arm_joint1": -20.0 / 180.0 * math.pi,
             "right_arm_joint2": 100.8 / 180.0 * math.pi,
             "right_arm_joint3": -22.0 / 180.0 * math.pi,
@@ -58,7 +58,7 @@ GALAXEA_R1_CHALLENGE_CFG = ArticulationCfg(
             "right_arm_joint5": -67.6 / 180.0 * math.pi,
             "right_arm_joint6": 18.1 / 180.0 * math.pi,
             "right_gripper_axis1": 0.04,
-            # "right_gripper_axis2": 0.04,
+            "right_gripper_axis2": 0.04,  # Both axes needed for parallel-jaw gripper
             # "torso_joint1": 28.6479 / 180.0 * math.pi,
             # "torso_joint2": -45.8366 / 180.0 * math.pi,
             # "torso_joint3": 28.6479 / 180.0 * math.pi,
@@ -103,7 +103,9 @@ GALAXEA_R1_CHALLENGE_CFG = ArticulationCfg(
                 velocity_limit_sim=10,
             ),
             "r1_grippers": ImplicitActuatorCfg(
-                joint_names_expr=[".*_gripper_axis1"],
+                # IMPORTANT: Control BOTH axis1 and axis2 for parallel-jaw gripper
+                # If only axis1 is controlled, axis2 blocks opening!
+                joint_names_expr=[".*_gripper_axis.*"],
                 effort_limit_sim=100.0,
                 velocity_limit_sim=0.07,
                 stiffness=25000.0,

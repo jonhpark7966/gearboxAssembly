@@ -132,8 +132,12 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
     # - controllable joint
     left_arm_joint_dof_name = "left_arm_joint.*"
     right_arm_joint_dof_name = "right_arm_joint.*"
+    # Gripper axis1 (primary - used for action interface)
     left_gripper_dof_name = "left_gripper_axis1"
     right_gripper_dof_name = "right_gripper_axis1"
+    # Gripper axis2 (secondary - mirrored from axis1 for parallel-jaw gripper)
+    left_gripper_axis2_dof_name = "left_gripper_axis2"
+    right_gripper_axis2_dof_name = "right_gripper_axis2"
 
     torso_joint_dof_name = "torso_joint[1-3]" # Since in current task, torso_joint4 will always be fixed at 0.0
     torso_joint1_dof_name = "torso_joint1"

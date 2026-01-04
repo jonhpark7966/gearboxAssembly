@@ -49,6 +49,12 @@ class GalaxeaLabAgentEnv(DirectRLEnv):
         self._left_gripper_dof_idx, _ = self.robot.find_joints(self.cfg.left_gripper_dof_name)
         self._right_gripper_dof_idx, _ = self.robot.find_joints(self.cfg.right_gripper_dof_name)
 
+        # Find axis2 joints for parallel-jaw gripper (mirrors axis1)
+        self._left_gripper_axis2_idx, _ = self.robot.find_joints(self.cfg.left_gripper_axis2_dof_name)
+        self._right_gripper_axis2_idx, _ = self.robot.find_joints(self.cfg.right_gripper_axis2_dof_name)
+        print(f"_left_gripper_axis2_idx: {self._left_gripper_axis2_idx}")
+        print(f"_right_gripper_axis2_idx: {self._right_gripper_axis2_idx}")
+
         self._left_arm_action = torch.zeros(self._left_arm_joint_idx, device=self.device)
         self._right_arm_action = torch.zeros(self._right_arm_joint_idx, device=self.device)
         self._left_gripper_action = torch.zeros(1, device=self.device)
@@ -68,6 +74,55 @@ class GalaxeaLabAgentEnv(DirectRLEnv):
         print(f"_right_gripper_dof_idx: {self._right_gripper_dof_idx}")
 
         self._joint_idx = self._left_arm_joint_idx + self._right_arm_joint_idx + self._left_gripper_dof_idx + self._right_gripper_dof_idx
+
+        # === CRITICAL DEBUG: Verify joint indices ===
+        print("\n" + "="*60)
+        print("=== JOINT INDEX VERIFICATION (Gripper Debug) ===")
+        print("="*60)
+        print(f"All robot joint names: {self.robot.joint_names}")
+        print(f"Total joints in robot: {len(self.robot.joint_names)}")
+        print(f"\n_joint_idx (combined): {self._joint_idx}")
+        print(f"len(_joint_idx): {len(self._joint_idx)}")
+        print(f"\nExpected mapping:")
+        print(f"  action[0:6]  -> left_arm_joint[1-6]")
+        print(f"  action[6:12] -> right_arm_joint[1-6]")
+        print(f"  action[12]   -> left_gripper_axis1")
+        print(f"  action[13]   -> right_gripper_axis1")
+        print(f"\nActual _joint_idx -> joint_name mapping:")
+        for i, idx in enumerate(self._joint_idx):
+            if idx < len(self.robot.joint_names):
+                print(f"  action[{i:2d}] -> _joint_idx[{i}]={idx:2d} -> {self.robot.joint_names[idx]}")
+            else:
+                print(f"  action[{i:2d}] -> _joint_idx[{i}]={idx:2d} -> OUT OF RANGE!")
+
+        # Check for axis2 existence
+        axis2_joints = [name for name in self.robot.joint_names if "axis2" in name]
+        if axis2_joints:
+            print(f"\n⚠️  WARNING: Found axis2 joints that are NOT controlled: {axis2_joints}")
+            print("   This could cause gripper to not open if axis2 blocks axis1!")
+        else:
+            print(f"\n✓ No axis2 joints found in robot")
+
+        # === ACTUATOR DEBUG: Check which joints each actuator controls ===
+        print(f"\n=== ACTUATOR CONFIGURATION ===")
+        for name, actuator in self.robot.actuators.items():
+            joint_names = [self.robot.joint_names[i] for i in actuator.joint_indices]
+            print(f"  Actuator '{name}':")
+            print(f"    joint_indices: {actuator.joint_indices}")
+            print(f"    joint_names: {joint_names}")
+            if hasattr(actuator, 'stiffness'):
+                print(f"    stiffness: {actuator.stiffness}")
+            if hasattr(actuator, 'damping'):
+                print(f"    damping: {actuator.damping}")
+
+        # === JOINT LIMIT DEBUG: Check PhysX joint limits ===
+        print(f"\n=== JOINT LIMITS (from PhysX) ===")
+        joint_limits = self.robot.root_physx_view.get_dof_limits()[0]
+        for i, name in enumerate(self.robot.joint_names):
+            if "gripper" in name:
+                low, high = joint_limits[i]
+                print(f"  {name}: [{low:.6f}, {high:.6f}]")
+        print("="*60 + "\n")
 
         self.left_arm_joint_pos = self.robot.data.joint_pos[:, self._left_arm_joint_idx]
         self.right_arm_joint_pos = self.robot.data.joint_pos[:, self._right_arm_joint_idx]
@@ -170,8 +225,35 @@ class GalaxeaLabAgentEnv(DirectRLEnv):
         # action, joint_ids = self.rule_policy.get_action()
         action = self.env_step_action
 
+        # === GRIPPER DEBUG: Log target vs actual before applying ===
+        if not hasattr(self, '_gripper_debug_count'):
+            self._gripper_debug_count = 0
+        self._gripper_debug_count += 1
+
+        if self._gripper_debug_count <= 20:  # Only first 20 calls
+            left_target = action[0, 12].item() if action.dim() > 1 else action[12].item()
+            right_target = action[0, 13].item() if action.dim() > 1 else action[13].item()
+            left_actual = self.robot.data.joint_pos[0, self._left_gripper_dof_idx[0]].item()
+            right_actual = self.robot.data.joint_pos[0, self._right_gripper_dof_idx[0]].item()
+            print(f"  [GRIPPER DEBUG #{self._gripper_debug_count}]")
+            print(f"    Target: L={left_target:.4f}, R={right_target:.4f}")
+            print(f"    Actual: L={left_actual:.4f}, R={right_actual:.4f}")
+            print(f"    Error:  L={left_target - left_actual:.4f}, R={right_target - right_actual:.4f}")
+
         # Apply action to the robot
         self.robot.set_joint_position_target(action, self._joint_idx)
+
+        # Mirror gripper axis1 targets to axis2 (parallel-jaw gripper)
+        # axis2 must move with axis1, otherwise it blocks axis1 from opening
+        if self._left_gripper_axis2_idx and self._right_gripper_axis2_idx:
+            left_grip_target = action[0, 12].item() if action.dim() > 1 else action[12].item()
+            right_grip_target = action[0, 13].item() if action.dim() > 1 else action[13].item()
+            axis2_targets = torch.tensor(
+                [[left_grip_target, right_grip_target]],
+                device=self.device
+            )
+            axis2_idx = self._left_gripper_axis2_idx + self._right_gripper_axis2_idx
+            self.robot.set_joint_position_target(axis2_targets, axis2_idx)
 
         self.rule_policy.count += 1
         sim_dt = self.sim.get_physics_dt()
