@@ -97,6 +97,44 @@ The **gearbox part models (`.usd` files)** within this repository are managed us
     python scripts/VLA_agent.py --task=Template-Galaxea-Lab-Agent-Direct-v0 --enable_cameras --checkpoint='Your-VLA-Checkpoint-File-Path'
     ```
 
+- **Running the R1 gearbox assembly task with XR Teleoperation (Apple Vision Pro / CloudXR)**
+
+    This enables teleoperation using OpenXR hand tracking with Apple Vision Pro via CloudXR streaming.
+
+    ```bash
+    # Run from IsaacLab directory
+    ./isaaclab.sh -p ../gearboxAssembly/scripts/teleop_r1_agent.py \
+        --task Template-Galaxea-Lab-Agent-Direct-v0 \
+        --teleop_device handtracking
+    ```
+
+    **Key Options:**
+    | Option | Default | Description |
+    |--------|---------|-------------|
+    | `--teleop_device` | `handtracking` | Teleoperation device (handtracking, keyboard) |
+    | `--rotation_fix_left` | `flip_yaw` | Rotation correction for left hand |
+    | `--rotation_fix_right` | `flip_yaw_negate_z` | Rotation correction for right hand |
+    | `--record` | `False` | Enable HDF5 data recording |
+    | `--record_dir` | `./data/teleop_demos` | Directory to save recordings |
+    | `--min_score` | `1` | Minimum score (0-6) to save episode |
+    | `--hand_markers` | `False` | Show hand tracking markers |
+    | `--use_raw_grip` | `False` | Use raw finger distance for smoother gripper control |
+
+    **Example with recording:**
+    ```bash
+    ./isaaclab.sh -p ../gearboxAssembly/scripts/teleop_r1_agent.py \
+        --task Template-Galaxea-Lab-Agent-Direct-v0 \
+        --teleop_device handtracking \
+        --record \
+        --record_dir ./data/teleop_demos \
+        --min_score 1
+    ```
+
+    **Gestures:**
+    - **START**: Pinch thumb and index finger together, then release to activate teleoperation
+    - **STOP**: Pinch gesture to deactivate teleoperation
+    - **Gripper**: Pinch to close gripper, release to open
+
 ### Set up IDE (Optional)
 
 To setup the IDE, please follow these instructions:
