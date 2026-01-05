@@ -94,6 +94,12 @@ parser.add_argument(
     help="Directory to save recordings",
 )
 parser.add_argument(
+    "--min_score",
+    type=int,
+    default=1,
+    help="Minimum score to save episode (0-6). Episodes below this are discarded.",
+)
+parser.add_argument(
     "--visualize_targets",
     action="store_true",
     help="Visualize EE target markers",
@@ -126,6 +132,25 @@ parser.add_argument(
     type=int,
     default=200,
     help="Number of frames to print debug output (default: 200)",
+)
+parser.add_argument(
+    "--rotation_fix",
+    type=str,
+    default="none",
+    choices=["none", "undo_x90", "undo_x90_flip_z", "flip_pitch", "flip_roll", "flip_yaw", "custom"],
+    help="Apply rotation correction to BOTH hands (default: none)",
+)
+parser.add_argument(
+    "--rotation_fix_left",
+    type=str,
+    default="flip_yaw",  # Known working value for left hand
+    help="Override rotation fix for LEFT hand (default: flip_yaw)",
+)
+parser.add_argument(
+    "--rotation_fix_right",
+    type=str,
+    default="flip_yaw_negate_z",  # Known working value for right hand
+    help="Override rotation fix for RIGHT hand (default: flip_yaw_negate_z)",
 )
 
 # Add AppLauncher arguments
@@ -171,6 +196,242 @@ from teleop_data_recorder import TeleopDataRecorder
 # - --hand_markers: spheres for wrist/thumb/index (OpenXR only)
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Rotation Fix Utilities
+# ============================================================================
+def apply_rotation_fix(quat: torch.Tensor, fix_type: str) -> torch.Tensor:
+    """Apply rotation correction to quaternion to fix axis mapping issues.
+
+    The Se3AbsRetargeter applies a 90° X-axis rotation which may not match
+    the robot's end-effector coordinate system. This function provides
+    various corrections to test and fix the mapping.
+
+    Args:
+        quat: Quaternion in (w, x, y, z) format, shape (N, 4)
+        fix_type: Type of fix to apply
+
+    Returns:
+        Corrected quaternion in (w, x, y, z) format
+    """
+    if fix_type == "none":
+        return quat
+
+    device = quat.device
+
+    # Pre-computed rotation quaternions (w, x, y, z)
+    # For rotation by angle θ around axis: q = (cos(θ/2), sin(θ/2)*axis)
+
+    if fix_type == "undo_x90":
+        # Undo the 90° X-rotation applied by Se3AbsRetargeter
+        # -90° around X: cos(-45°)=0.7071, sin(-45°)=-0.7071
+        fix_quat = torch.tensor([0.7071068, -0.7071068, 0.0, 0.0], device=device)
+        return quat_mul(quat, fix_quat.unsqueeze(0).expand(quat.shape[0], -1))
+
+    elif fix_type == "undo_x90_flip_z":
+        # Undo 90° X-rotation, then flip around Z (180° Z rotation)
+        # -90° X then 180° Z
+        fix_x = torch.tensor([0.7071068, -0.7071068, 0.0, 0.0], device=device)
+        fix_z = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)  # 180° around Z
+        fix_quat = quat_mul(fix_z.unsqueeze(0), fix_x.unsqueeze(0)).squeeze(0)
+        return quat_mul(quat, fix_quat.unsqueeze(0).expand(quat.shape[0], -1))
+
+    elif fix_type == "flip_pitch":
+        # Flip pitch by conjugating the X component
+        # q = (w, x, y, z) -> (w, -x, y, z) is NOT a valid rotation flip
+        # Instead, we apply 180° rotation around Y to flip pitch direction
+        fix_quat = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device)  # 180° around Y
+        return quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+
+    elif fix_type == "flip_roll":
+        # Flip roll by 180° rotation around X
+        fix_quat = torch.tensor([0.0, 1.0, 0.0, 0.0], device=device)  # 180° around X
+        return quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+
+    elif fix_type == "flip_yaw":
+        # Flip yaw by 180° rotation around Z
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)  # 180° around Z
+        return quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+
+    elif fix_type == "flip_yaw_mirror":
+        # For mirrored hand (right hand when left uses flip_yaw)
+        # Apply yaw flip + pitch flip to account for mirror symmetry
+        # 180° Z + 180° Y = combined rotation for mirrored hand
+        fix_z = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)  # 180° around Z
+        fix_y = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device)  # 180° around Y
+        fix_quat = quat_mul(fix_z.unsqueeze(0), fix_y.unsqueeze(0)).squeeze(0)
+        return quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+
+    elif fix_type == "custom":
+        # Custom fix: experiment with different rotations
+        # OpenXR uses Y-up, -Z forward; Isaac uses Z-up, X forward
+        # This requires a coordinate system transformation
+        # Rotation from OpenXR to Isaac: 90° around X, then -90° around Z
+        fix_x90 = torch.tensor([0.7071068, 0.7071068, 0.0, 0.0], device=device)  # 90° X
+        fix_z_neg90 = torch.tensor([0.7071068, 0.0, 0.0, -0.7071068], device=device)  # -90° Z
+        fix_quat = quat_mul(fix_z_neg90.unsqueeze(0), fix_x90.unsqueeze(0)).squeeze(0)
+        return quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+
+    # === Additional options for debugging ===
+
+    elif fix_type == "conjugate":
+        # Invert the rotation: q* = (w, -x, -y, -z)
+        return torch.stack([quat[:, 0], -quat[:, 1], -quat[:, 2], -quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_x":
+        # Negate only X component
+        return torch.stack([quat[:, 0], -quat[:, 1], quat[:, 2], quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_y":
+        # Negate only Y component
+        return torch.stack([quat[:, 0], quat[:, 1], -quat[:, 2], quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_z":
+        # Negate only Z component
+        return torch.stack([quat[:, 0], quat[:, 1], quat[:, 2], -quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_xy":
+        # Negate X and Y (like reflecting across Z axis)
+        return torch.stack([quat[:, 0], -quat[:, 1], -quat[:, 2], quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_xz":
+        # Negate X and Z (like reflecting across Y axis)
+        return torch.stack([quat[:, 0], -quat[:, 1], quat[:, 2], -quat[:, 3]], dim=-1)
+
+    elif fix_type == "negate_yz":
+        # Negate Y and Z (like reflecting across X axis)
+        return torch.stack([quat[:, 0], quat[:, 1], -quat[:, 2], -quat[:, 3]], dim=-1)
+
+    elif fix_type == "mirror_x":
+        # Mirror across YZ plane: reflect X position and rotation
+        # For right hand mirroring: negate x component of quaternion
+        return torch.stack([quat[:, 0], -quat[:, 1], quat[:, 2], quat[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_x":
+        # flip_yaw + negate X component
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], -result[:, 1], result[:, 2], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_y":
+        # flip_yaw + negate Y component
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], result[:, 1], -result[:, 2], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_z":
+        # flip_yaw + negate Z component
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], result[:, 1], result[:, 2], -result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_conjugate":
+        # flip_yaw + conjugate
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], -result[:, 1], -result[:, 2], -result[:, 3]], dim=-1)
+
+    elif fix_type == "swap_xy":
+        # Swap X and Y components
+        return torch.stack([quat[:, 0], quat[:, 2], quat[:, 1], quat[:, 3]], dim=-1)
+
+    elif fix_type == "swap_xz":
+        # Swap X and Z components
+        return torch.stack([quat[:, 0], quat[:, 3], quat[:, 2], quat[:, 1]], dim=-1)
+
+    elif fix_type == "swap_yz":
+        # Swap Y and Z components
+        return torch.stack([quat[:, 0], quat[:, 1], quat[:, 3], quat[:, 2]], dim=-1)
+
+    # === flip_yaw + swap combinations ===
+
+    elif fix_type == "flip_yaw_swap_xy":
+        # flip_yaw then swap X and Y
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], result[:, 2], result[:, 1], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_xz":
+        # flip_yaw then swap X and Z
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], result[:, 3], result[:, 2], result[:, 1]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz":
+        # flip_yaw then swap Y and Z
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        return torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+
+    # === flip_yaw_swap_yz + individual axis negations ===
+
+    elif fix_type == "flip_yaw_swap_yz_neg_x":
+        # flip_yaw + swap_yz + negate X (roll 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], -result[:, 1], result[:, 2], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz_neg_y":
+        # flip_yaw + swap_yz + negate Y (pitch 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 1], -result[:, 2], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz_neg_z":
+        # flip_yaw + swap_yz + negate Z (yaw 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 1], result[:, 2], -result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz_neg_xy":
+        # flip_yaw + swap_yz + negate X and Y (roll + pitch 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], -result[:, 1], -result[:, 2], result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz_neg_xz":
+        # flip_yaw + swap_yz + negate X and Z (roll + yaw 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], -result[:, 1], result[:, 2], -result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_swap_yz_neg_yz":
+        # flip_yaw + swap_yz + negate Y and Z (pitch + yaw 반전)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 1], -result[:, 2], -result[:, 3]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_x_swap_yz":
+        # flip_yaw + negate_x + swap Y and Z (current right + swap)
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], -result[:, 1], result[:, 2], result[:, 3]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 1], result[:, 3], result[:, 2]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_x_swap_xz":
+        # flip_yaw + negate_x + swap X and Z
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], -result[:, 1], result[:, 2], result[:, 3]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 3], result[:, 2], result[:, 1]], dim=-1)
+
+    elif fix_type == "flip_yaw_negate_x_swap_xy":
+        # flip_yaw + negate_x + swap X and Y
+        fix_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device)
+        result = quat_mul(fix_quat.unsqueeze(0).expand(quat.shape[0], -1), quat)
+        result = torch.stack([result[:, 0], -result[:, 1], result[:, 2], result[:, 3]], dim=-1)
+        return torch.stack([result[:, 0], result[:, 2], result[:, 1], result[:, 3]], dim=-1)
+
+    else:
+        print(f"[Teleop] Unknown rotation_fix: {fix_type}, using none")
+        return quat
 
 
 # ============================================================================
@@ -528,6 +789,7 @@ def main() -> None:
         if recorder and args_cli.record:
             recorder.start_recording()
             is_recording = True
+            print(f"[Recorder] Recording started (min_score={args_cli.min_score} to save)")
         debug_logger.log_event("START gesture detected - teleop activated")
         print("[Teleop] Activated - START gesture detected")
 
@@ -535,13 +797,30 @@ def main() -> None:
         nonlocal teleoperation_active, is_recording
         teleoperation_active = False
         if recorder and is_recording:
-            recorder.stop_recording(save=True)
+            # Check score and decide save/discard
+            current_score = env.evaluate_score() if hasattr(env, 'evaluate_score') else 0
+            if current_score >= args_cli.min_score:
+                recorder.stop_recording(save=True)
+                print(f"[Recorder] Episode SAVED (score={current_score} >= {args_cli.min_score})")
+            else:
+                recorder.discard_episode()
+                print(f"[Recorder] Episode DISCARDED (score={current_score} < {args_cli.min_score})")
             is_recording = False
         debug_logger.log_event("STOP gesture detected - teleop deactivated")
         print("[Teleop] Deactivated - STOP gesture detected")
 
     def reset_environment() -> None:
-        nonlocal should_reset, need_reanchor
+        nonlocal should_reset, need_reanchor, is_recording
+        # Save/discard current episode before reset
+        if recorder and is_recording:
+            current_score = env.evaluate_score() if hasattr(env, 'evaluate_score') else 0
+            if current_score >= args_cli.min_score:
+                recorder.stop_recording(save=True)
+                print(f"[Recorder] Episode SAVED (score={current_score} >= {args_cli.min_score})")
+            else:
+                recorder.discard_episode()
+                print(f"[Recorder] Episode DISCARDED (score={current_score} < {args_cli.min_score})")
+            is_recording = False
         should_reset = True
         need_reanchor = True
         debug_logger.log_event("RESET triggered")
@@ -614,6 +893,16 @@ def main() -> None:
     else:
         print("[Teleop] Gripper mode: RETARGETER (hysteresis, 0.03m close / 0.05m open)")
         print("[Teleop] Tip: Use --use_raw_grip for smoother gripper control")
+
+    # Show rotation fix setting
+    left_fix = args_cli.rotation_fix_left if args_cli.rotation_fix_left else args_cli.rotation_fix
+    right_fix = args_cli.rotation_fix_right if args_cli.rotation_fix_right else args_cli.rotation_fix
+    if left_fix != "none" or right_fix != "none":
+        print(f"[Teleop] Rotation fix - Left: {left_fix}, Right: {right_fix}")
+    else:
+        print("[Teleop] Rotation fix: none (use --rotation_fix to fix axis mapping)")
+        print("[Teleop]   Options: undo_x90, flip_pitch, flip_roll, flip_yaw, flip_yaw_mirror, custom")
+        print("[Teleop]   Use --rotation_fix_left/--rotation_fix_right for per-hand control")
 
     # Reset environment
     obs, _ = env.reset()
@@ -719,6 +1008,21 @@ def main() -> None:
                         right_pos = right_pos.unsqueeze(0)
                         right_quat = right_quat.unsqueeze(0)
                         right_grip = right_grip.unsqueeze(0)
+
+                    # Apply rotation fix to correct axis mapping
+                    # The Se3AbsRetargeter applies a 90° X-rotation that may not match the robot
+                    # Left and right hands may need different corrections due to mirror symmetry
+                    left_fix = args_cli.rotation_fix_left if args_cli.rotation_fix_left else args_cli.rotation_fix
+                    right_fix = args_cli.rotation_fix_right if args_cli.rotation_fix_right else args_cli.rotation_fix
+
+                    if left_fix != "none":
+                        left_quat = apply_rotation_fix(left_quat, left_fix)
+                    if right_fix != "none":
+                        right_quat = apply_rotation_fix(right_quat, right_fix)
+
+                    if not hasattr(main, '_rotation_fix_logged'):
+                        print(f"[Teleop] Rotation fix - Left: {left_fix}, Right: {right_fix}")
+                        main._rotation_fix_logged = True
 
                     # Log parsed values
                     debug_logger.log_parsed(left_pos, left_quat, left_grip, right_pos, right_quat, right_grip)
@@ -924,7 +1228,40 @@ def main() -> None:
 
                     # Handle terminated or truncated episodes
                     if terminated.any() or truncated.any():
-                        debug_logger.log_event(f"Episode ended: terminated={terminated.any().item()}, truncated={truncated.any().item()}")
+                        # Log detailed reset reason
+                        reset_reasons = []
+                        if hasattr(env, 'evaluate_score'):
+                            score = env.evaluate_score()
+                            if score == 6:
+                                reset_reasons.append(f"TASK_COMPLETE (score=6)")
+                        if hasattr(env, 'rule_policy'):
+                            rp = env.rule_policy
+                            if rp.count >= rp.total_time_steps:
+                                elapsed_sec = rp.count * env.sim.get_physics_dt()
+                                limit_sec = rp.total_time_steps * env.sim.get_physics_dt()
+                                reset_reasons.append(f"RULE_POLICY_TIMEOUT (count={rp.count} >= total={rp.total_time_steps}, {elapsed_sec:.1f}s >= {limit_sec:.1f}s)")
+                        if hasattr(env, 'episode_length_buf') and hasattr(env, 'max_episode_length'):
+                            if env.episode_length_buf.any() >= env.max_episode_length - 1:
+                                reset_reasons.append(f"EPISODE_TIMEOUT (buf={env.episode_length_buf[0].item()} >= max={env.max_episode_length})")
+
+                        reason_str = " | ".join(reset_reasons) if reset_reasons else "UNKNOWN"
+                        print(f"\n[RESET] Episode ended - Reason: {reason_str}")
+                        print(f"[RESET] terminated={terminated.any().item()}, truncated={truncated.any().item()}")
+                        debug_logger.log_event(f"Episode ended: {reason_str}")
+
+                        # Save/discard episode based on score
+                        if recorder and is_recording:
+                            current_score = env.evaluate_score() if hasattr(env, 'evaluate_score') else 0
+                            if current_score >= args_cli.min_score:
+                                recorder.stop_recording(save=True)
+                                print(f"[Recorder] Episode SAVED (score={current_score} >= {args_cli.min_score})")
+                            else:
+                                recorder.discard_episode()
+                                print(f"[Recorder] Episode DISCARDED (score={current_score} < {args_cli.min_score})")
+                            is_recording = False
+                            # Start new recording for next episode
+                            recorder.start_recording()
+                            is_recording = True
                         # Auto-reset is handled by env, but we need to reanchor
                         need_reanchor = True
 
@@ -958,7 +1295,14 @@ def main() -> None:
 
     # Cleanup
     if recorder and is_recording:
-        recorder.stop_recording(save=True)
+        # Final episode: check score before saving
+        current_score = env.evaluate_score() if hasattr(env, 'evaluate_score') else 0
+        if current_score >= args_cli.min_score:
+            recorder.stop_recording(save=True)
+            print(f"[Recorder] Final episode SAVED (score={current_score} >= {args_cli.min_score})")
+        else:
+            recorder.discard_episode()
+            print(f"[Recorder] Final episode DISCARDED (score={current_score} < {args_cli.min_score})")
     debug_logger.close()
     env.close()
     print("[Teleop] Environment closed")

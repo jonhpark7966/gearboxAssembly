@@ -411,7 +411,9 @@ class GalaxeaLabAgentEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         print(f"--------------------------------Get dones at {self.rule_policy.count * self.sim.get_physics_dt()} seconds--------------------------------")
-        finish_task = torch.tensor(self.evaluate_score() == 6, device=self.device) or self.rule_policy.count >= self.rule_policy.total_time_steps
+        # Only finish when task is complete (score==6)
+        # Removed rule_policy timeout (was ~31s) - episode_length_s (300s) handles timeout instead
+        finish_task = torch.tensor(self.evaluate_score() == 6, device=self.device)
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
         return finish_task, time_out

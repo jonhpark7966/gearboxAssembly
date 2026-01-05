@@ -51,7 +51,7 @@ class GalaxeaLabAgentEnvCfg(DirectRLEnvCfg):
     # env
     sim_dt = 0.01
     decimation = 5
-    episode_length_s = 60.0
+    episode_length_s = 300.0  # 5 minutes for teleoperation
     # - spaces definition
     action_space = 14
     observation_space = 14
