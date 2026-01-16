@@ -105,32 +105,33 @@ class GalaxeaRulePolicy:
 
         # Times for each step
         # 1. Move the arm to the target position above the gear and keep the orientation
-        # 2. Move the arm to the target position and keep the orientation
-        # 3. Close the gripper
-        # 4. Move the arm to the target position above the gear and keep the orientation
+        # 2. Wait for stabilization
+        # 3. Move the arm to the target position and keep the orientation
+        # 4. Close the gripper
+        # 5. Move the arm to the target position above the gear and keep the orientation
         # time_step_1 = torch.tensor([0.0, 5.0, 1.0, 2.0, 1.0, 2.0], device=sim.device)
-        self.time_step_1 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_1 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_1 = torch.cumsum(self.time_step_1, dim=0) + self.time_step_0
         self.count_step_1 = self.time_step_1 / self.sim_dt
         self.count_step_1 = self.count_step_1.int()
         print(f"count_step_1: {self.count_step_1}")
 
         # Mount the gear to the planetary_carrier
-        self.time_step_2 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_2 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_2 = torch.cumsum(self.time_step_2, dim=0) + self.time_step_1[-1]
         self.count_step_2 = self.time_step_2 / self.sim_dt
         self.count_step_2 = self.count_step_2.int()
         print(f"count_step_2: {self.count_step_2}")
 
         # Pick up the 2nd gear
-        self.time_step_3 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_3 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_3 = torch.cumsum(self.time_step_3, dim=0) + self.time_step_2[-1]
         self.count_step_3 = self.time_step_3 / self.sim_dt
         self.count_step_3 = self.count_step_3.int()
         print(f"count_step_3: {self.count_step_3}")
 
         # Mount the 2nd gear to the planetary_carrier
-        self.time_step_4 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_4 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_4 = torch.cumsum(self.time_step_4, dim=0) + self.time_step_3[-1]
         self.count_step_4 = self.time_step_4 / self.sim_dt
         self.count_step_4 = self.count_step_4.int()
@@ -144,29 +145,29 @@ class GalaxeaRulePolicy:
         print(f"count_step_5: {self.count_step_5}")
 
         # Pick up the 3rd gear
-        self.time_step_6 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_6 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_6 = torch.cumsum(self.time_step_6, dim=0) + self.time_step_5[-1]
         self.count_step_6 = self.time_step_6 / self.sim_dt
         self.count_step_6 = self.count_step_6.int()
         print(f"count_step_6: {self.count_step_6}")
 
         # Mount the 3rd gear to the planetary_carrier
-        self.time_step_7 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_7 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_7 = torch.cumsum(self.time_step_7, dim=0) + self.time_step_6[-1]
         self.count_step_7 = self.time_step_7 / self.sim_dt
         self.count_step_7 = self.count_step_7.int()
         print(f"count_step_7: {self.count_step_7}")
 
         # Pick up the 4th gear
-        self.time_step_8 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_8 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_8 = torch.cumsum(self.time_step_8, dim=0) + self.time_step_7[-1]
         self.count_step_8 = self.time_step_8 / self.sim_dt
         self.count_step_8 = self.count_step_8.int()
         print(f"count_step_8: {self.count_step_8}")
 
-        # Mount the 4th gear to the planetary_carrier. 
+        # Mount the 4th gear to the planetary_carrier.
         # Another rotation is performed to aid the insertion
-        self.time_step_9 = torch.tensor([0.0, 0.5, 0.5, 5.0, 0.5, 0.5], device=sim.device)
+        self.time_step_9 = torch.tensor([0.0, 0.5, 0.5, 0.5, 5.0, 0.5, 0.5], device=sim.device)
         self.time_step_9 = torch.cumsum(self.time_step_9, dim=0) + self.time_step_8[-1]
         self.count_step_9 = self.time_step_9 / self.sim_dt
         self.count_step_9 = self.count_step_9.int()
@@ -180,14 +181,14 @@ class GalaxeaRulePolicy:
         print(f"count_step_10: {self.count_step_10}")
 
         # Pick up the big ring gear
-        self.time_step_11 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_11 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_11 = torch.cumsum(self.time_step_11, dim=0) + self.time_step_10[-1]
         self.count_step_11 = self.time_step_11 / self.sim_dt
         self.count_step_11 = self.count_step_11.int()
         print(f"count_step_11: {self.count_step_11}")
 
         # Mount the ring on the carrier
-        self.time_step_12 = torch.tensor([0.0, 0.5, 0.5, 3.0, 0.5, 0.5], device=sim.device)
+        self.time_step_12 = torch.tensor([0.0, 0.5, 0.5, 0.5, 3.0, 0.5, 0.5], device=sim.device)
         self.time_step_12 = torch.cumsum(self.time_step_12, dim=0) + self.time_step_11[-1]
         self.count_step_12 = self.time_step_12 / self.sim_dt
         self.count_step_12 = self.count_step_12.int()
@@ -195,14 +196,14 @@ class GalaxeaRulePolicy:
         
 
         # Pick up the reducer
-        self.time_step_13 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_13 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_13 = torch.cumsum(self.time_step_13, dim=0) + self.time_step_12[-1]
         self.count_step_13 = self.time_step_13 / self.sim_dt
         self.count_step_13 = self.count_step_13.int()
         print(f"count_step_13: {self.count_step_13}")
 
         # Mount the reducer to the gear
-        self.time_step_14 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5], device=sim.device)
+        self.time_step_14 = torch.tensor([0.0, 0.5, 0.5, 0.5, 0.5, 0.5], device=sim.device)
         self.time_step_14 = torch.cumsum(self.time_step_14, dim=0) + self.time_step_13[-1]
         self.count_step_14 = self.time_step_14 / self.sim_dt
         self.count_step_14 = self.count_step_14.int()
@@ -522,56 +523,35 @@ class GalaxeaRulePolicy:
         # ik_commands = torch.cat([target_position, target_orientation], dim=-1,)
 
         # print("scene['robot'].data.joint_pos: ", scene["robot"].data.joint_pos)
+        # Step 1.1: Move the arm to the target position above the gear
         if self.count >= count_step[0] and self.count < count_step[1]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            # target_marker.visualize(target_position_h, target_orientation)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller, 
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller,
                                     target_position_h, target_orientation, None)
-        
-        # Step 1.2: Open the gripper
+
+        # Step 1.2: Wait for stabilization (hold position)
+        if self.count >= count_step[1] and self.count < count_step[2]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller,
+                                    target_position_h, target_orientation, None)
+
+        # Step 1.3: Open the gripper
         gripper_joint_ids = gripper_entity_cfg.joint_ids
         gripper_body_ids = gripper_entity_cfg.body_ids
         num_gripper_joints = len(gripper_joint_ids)
 
-        # Step 1.3: Move the arm to the target position and keep the orientation
-        # target_position_2 = target_position
-        # target_orientation = torch.tensor([[0.0, -1.0, 0.0, 0.0]], device=sim.device)
-        if self.count >= count_step[1] and self.count < count_step[2]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller, 
-            #                         target_position, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller, 
-                                    target_position, target_orientation, None)
-            # target_marker.visualize(target_position, target_orientation)
-
-        # Step 1.4: Close the gripper
-        
+        # Step 1.4: Move the arm to the target position (descend)
         if self.count >= count_step[2] and self.count < count_step[3]:
-            # gripper_joint_pos_des = torch.full(
-            #         (num_gripper_joints,), 0.0, device=self.sim.device
-            #     )
-            # self.scene["robot"].set_joint_position_target(
-            #         gripper_joint_pos_des, joint_ids=gripper_joint_ids
-            #     )
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, diff_ik_controller,
+                                    target_position, target_orientation, None)
+
+        # Step 1.5: Close the gripper
+        if self.count >= count_step[3] and self.count < count_step[4]:
             action = torch.tensor([[0.0]], device=self.sim.device)
             joint_ids = gripper_joint_ids
 
-
-        # Step 1.5: Move the arm to the target position above the gear and keep the orientation
-        # target_position = target_position + torch.tensor([0.0, 0.0, 0.1 + TCP_offset], device=sim.device)
-        # target_orientation = torch.tensor([[0.0, -1.0, 0.0, 0.0]], device=sim.device)
-        if self.count >= count_step[3] and self.count < count_step[4]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+        # Step 1.6: Move the arm to the target position above the gear (lift)
+        if self.count >= count_step[4] and self.count < count_step[5]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h, target_orientation, None)
-            # gripper_joint_pos_des = torch.full(
-            #         (num_gripper_joints,), 0.0, device=self.sim.device
-            #     )
-            # self.scene["robot"].set_joint_position_target(
-            #         gripper_joint_pos_des, joint_ids=gripper_joint_ids
-            #     )
-            # target_marker.visualize(target_position_h, target_orientation)
 
         return action, joint_ids
 
@@ -651,47 +631,35 @@ class GalaxeaRulePolicy:
 
         target_position_h_down = target_position + torch.tensor([0.0, 0.0, mount_height_offset], device=self.sim.device)
 
+        # Step 1: Move to position above target
         if self.count >= count_step[0] and self.count < count_step[1]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h, target_orientation, None)
-            # target_marker.visualize(target_position_h, target_orientation)
 
+        # Step 2: Wait for stabilization (hold position)
         if self.count >= count_step[1] and self.count < count_step[2]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
+                                    target_position_h, target_orientation, None)
 
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h_down, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-                                    target_position_h_down, target_orientation, None)
-            # target_marker.visualize(target_position_h_down, target_orientation)
-
+        # Step 3: Descend to mount position
         if self.count >= count_step[2] and self.count < count_step[3]:
-            gripper_joint_ids = gripper_entity_cfg.joint_ids
-            gripper_body_ids = gripper_entity_cfg.body_ids
-            num_gripper_joints = len(gripper_joint_ids)
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
+                                    target_position_h_down, target_orientation, None)
 
+        # Step 4: Open gripper
+        if self.count >= count_step[3] and self.count < count_step[4]:
+            gripper_joint_ids = gripper_entity_cfg.joint_ids
+            num_gripper_joints = len(gripper_joint_ids)
             gripper_joint_pos_des = torch.full(
                     (num_gripper_joints,), 0.04, device=self.device
                 )
-
-            # if gear_id == 5:
-            #     gripper_joint_pos_des = torch.full(
-            #         (num_gripper_joints,), 0.017, device=self.device
-            #     )
-
-            # self.scene["robot"].set_joint_position_target(
-            #         gripper_joint_pos_des, joint_ids=gripper_joint_ids
-            #     )
             action = gripper_joint_pos_des.unsqueeze(0)
             joint_ids = gripper_joint_ids
-            
-        if self.count >= count_step[3] and self.count < count_step[4]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+
+        # Step 5: Lift up
+        if self.count >= count_step[4] and self.count < count_step[5]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h, target_orientation, None)
-            # target_marker.visualize(target_position_h, target_orientation)
 
         return action, joint_ids
     
@@ -737,20 +705,20 @@ class GalaxeaRulePolicy:
 
         target_position_h_down = target_position + torch.tensor([0.0, 0.0, mount_height_offset], device=self.sim.device)
 
+        # Step 1: Move to position above target
         if self.count >= count_step[0] and self.count < count_step[1]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h, target_orientation, None)
-            # target_marker.visualize(target_position_h, target_orientation)
 
+        # Step 2: Wait for stabilization (hold position)
         if self.count >= count_step[1] and self.count < count_step[2]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
+                                    target_position_h, target_orientation, None)
 
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h_down, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+        # Step 3: Descend to mount position
+        if self.count >= count_step[2] and self.count < count_step[3]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h_down, target_orientation, None)
-            # target_marker.visualize(target_position_h_down, target_orientation)
 
         # Slightly rotate to fit into the gear
         if gear_id == 4:
@@ -758,38 +726,34 @@ class GalaxeaRulePolicy:
         else:
             rot_deg = 30
 
-        if self.count >= count_step[2] and self.count < count_step[3]:
-            # joint_pos = joint_pos[:, arm_joint_ids]
+        # Step 4: Rotate to fit
+        if self.count >= count_step[3] and self.count < count_step[4]:
             joint_ids = arm_entity_cfg.joint_ids
 
-            delta_rot_rad = rot_deg / (count_step[3] - count_step[2]) * torch.pi / 180.0
-            if self.count == count_step[2]:
+            delta_rot_rad = rot_deg / (count_step[4] - count_step[3]) * torch.pi / 180.0
+            if self.count == count_step[3]:
                 joint_pos = self.scene["robot"].data.joint_pos.clone()
                 self.step_initial_joint_pos = joint_pos[:, joint_ids].clone()
-            
+
             self.current_target_joint_pos = self.step_initial_joint_pos.clone()
-            self.current_target_joint_pos[:, 5] += delta_rot_rad * (self.count - count_step[2] + 5)
-            
+            self.current_target_joint_pos[:, 5] += delta_rot_rad * (self.count - count_step[3] + 5)
+
             action = self.current_target_joint_pos
 
-        if self.count >= count_step[3] and self.count < count_step[4]:
+        # Step 5: Open gripper
+        if self.count >= count_step[4] and self.count < count_step[5]:
             gripper_joint_ids = gripper_entity_cfg.joint_ids
-            gripper_body_ids = gripper_entity_cfg.body_ids
             num_gripper_joints = len(gripper_joint_ids)
-
             gripper_joint_pos_des = torch.full(
                     (num_gripper_joints,), 0.04, device=self.device
                 )
-
             action = gripper_joint_pos_des.unsqueeze(0)
             joint_ids = gripper_joint_ids
-            
-        if self.count >= count_step[4] and self.count < count_step[5]:
-            # self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
-            #                         target_position_h, target_orientation, None)
-            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller, 
+
+        # Step 6: Lift up
+        if self.count >= count_step[5] and self.count < count_step[6]:
+            action, joint_ids = self.move_robot_to_position(arm_entity_cfg, gripper_entity_cfg, self.diff_ik_controller,
                                     target_position_h, target_orientation, None)
-            # target_marker.visualize(target_position_h, target_orientation)
 
         return action, joint_ids
 

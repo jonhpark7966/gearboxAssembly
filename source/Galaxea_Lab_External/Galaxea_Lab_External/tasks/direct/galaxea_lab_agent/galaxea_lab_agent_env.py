@@ -118,6 +118,12 @@ class GalaxeaLabAgentEnv(DirectRLEnv):
         # === JOINT LIMIT DEBUG: Check PhysX joint limits ===
         print(f"\n=== JOINT LIMITS (from PhysX) ===")
         joint_limits = self.robot.root_physx_view.get_dof_limits()[0]
+        print("\n--- ARM JOINTS ---")
+        for i, name in enumerate(self.robot.joint_names):
+            if "arm_joint" in name:
+                low, high = joint_limits[i]
+                print(f"  {name}: [{low:.6f}, {high:.6f}]")
+        print("\n--- GRIPPER JOINTS ---")
         for i, name in enumerate(self.robot.joint_names):
             if "gripper" in name:
                 low, high = joint_limits[i]

@@ -113,6 +113,12 @@ class ObservationComponents:
     left_gripper_pos: torch.Tensor      # (num_envs,)
     right_gripper_pos: torch.Tensor     # (num_envs,)
 
+    # Joint velocities
+    left_arm_joint_vel: torch.Tensor    # (num_envs, 6)
+    right_arm_joint_vel: torch.Tensor   # (num_envs, 6)
+    left_gripper_vel: torch.Tensor      # (num_envs,)
+    right_gripper_vel: torch.Tensor     # (num_envs,)
+
     # Optional depth
     head_depth: Optional[torch.Tensor] = None
     left_hand_depth: Optional[torch.Tensor] = None
@@ -223,6 +229,10 @@ def parse_observation(obs_dict: Dict) -> ObservationComponents:
         right_arm_joint_pos=policy_obs["right_arm_joint_pos"],
         left_gripper_pos=policy_obs["left_gripper_joint_pos"],
         right_gripper_pos=policy_obs["right_gripper_joint_pos"],
+        left_arm_joint_vel=policy_obs["left_arm_joint_vel"],
+        right_arm_joint_vel=policy_obs["right_arm_joint_vel"],
+        left_gripper_vel=policy_obs["left_gripper_joint_vel"],
+        right_gripper_vel=policy_obs["right_gripper_joint_vel"],
         head_depth=policy_obs.get("head_depth"),
         left_hand_depth=policy_obs.get("left_hand_depth"),
         right_hand_depth=policy_obs.get("right_hand_depth"),
